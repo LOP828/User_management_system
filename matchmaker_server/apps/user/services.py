@@ -100,14 +100,31 @@ def calculate_profile_complete(payload):
     return len(profile_detail) >= PROFILE_DETAIL_MIN_FIELDS
 
 
-def can_access_user(actor, user):
+def can_view_user(actor, user):
+    if actor.role == Staff.ROLE_ADMIN:
+        return True
+    if user.owner_id == actor.id:
+        return True
+    return MatchCard.objects.filter(
+        Q(male_user_id=user.id) | Q(female_user_id=user.id)
+    ).filter(
+        Q(male_staff_id=actor.id) | Q(female_staff_id=actor.id) | Q(primary_staff_id=actor.id)
+    ).exists()
+
+
+def require_user_view_access(actor, user):
+    if not can_view_user(actor, user):
+        raise PermissionDenied("无权限")
+
+
+def can_edit_user(actor, user):
     if actor.role == Staff.ROLE_ADMIN:
         return True
     return user.owner_id == actor.id
 
 
-def require_user_access(actor, user):
-    if not can_access_user(actor, user):
+def require_user_edit_access(actor, user):
+    if not can_edit_user(actor, user):
         raise PermissionDenied("无权限")
 
 
@@ -189,7 +206,7 @@ def create_customer_profile(validated_data, actor):
 
 @transaction.atomic
 def update_customer_profile(instance, validated_data, actor, force=False, force_reason=None):
-    require_user_access(actor, instance)
+    require_user_edit_access(actor, instance)
 
     if "owner" in validated_data:
         # BR-TRANSFER-003: 仅 admin 可直接修改 owner_id，需 force + force_reason

@@ -148,6 +148,67 @@ def test_owner_and_admin_can_view_user_detail(auth_client, matchmaker_staff, adm
     }
 
 
+@pytest.mark.parametrize(
+    ("target_gender", "match_stage", "viewer_role"),
+    [
+        (CustomerProfile.GENDER_MALE, MatchCard.STAGE_INITIAL_CONTACT, "female_staff"),
+        (CustomerProfile.GENDER_FEMALE, MatchCard.STAGE_ENDED, "male_staff"),
+        (CustomerProfile.GENDER_MALE, MatchCard.STAGE_SUCCESS, "primary_staff"),
+    ],
+)
+def test_related_matchcard_staff_can_view_user_detail_read_only(
+    auth_client,
+    create_staff,
+    create_customer_profile,
+    target_gender,
+    match_stage,
+    viewer_role,
+):
+    owner = create_staff(phone="13800138094", name="Owner红娘")
+    partner_owner = create_staff(phone="13800138095", name="另一侧红娘")
+    related_viewer = create_staff(phone="13800138096", name="关联红娘")
+    target_user = create_customer_profile(
+        phone="13900139011",
+        owner=owner,
+        gender=target_gender,
+        is_in_match=match_stage in {
+            MatchCard.STAGE_INITIAL_CONTACT,
+            MatchCard.STAGE_STABLE_CONTACT,
+            MatchCard.STAGE_SUCCESS_PENDING_REVIEW,
+        },
+    )
+    partner_user = create_customer_profile(
+        phone="13900139012",
+        owner=partner_owner,
+        gender=CustomerProfile.GENDER_FEMALE if target_gender == CustomerProfile.GENDER_MALE else CustomerProfile.GENDER_MALE,
+        is_in_match=target_user.is_in_match,
+    )
+    if target_gender == CustomerProfile.GENDER_MALE:
+        male_user = target_user
+        female_user = partner_user
+        male_staff = owner
+        female_staff = related_viewer if viewer_role == "female_staff" else partner_owner
+    else:
+        male_user = partner_user
+        female_user = target_user
+        male_staff = related_viewer if viewer_role == "male_staff" else partner_owner
+        female_staff = owner
+
+    MatchCard.objects.create(
+        male_user=male_user,
+        female_user=female_user,
+        male_staff=male_staff,
+        female_staff=female_staff,
+        primary_staff=related_viewer if viewer_role == "primary_staff" else owner,
+        stage=match_stage,
+    )
+
+    response = auth_client(related_viewer).get(f"/api/v1/users/{target_user.id}/")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["id"] == target_user.id
+
+
 def test_non_owner_matchmaker_cannot_view_user_detail(auth_client, create_staff, create_customer_profile):
     owner = create_staff(phone="13800138090", name="A红娘")
     outsider = create_staff(phone="13800138091", name="B红娘")
@@ -231,6 +292,47 @@ def test_non_owner_matchmaker_cannot_patch_user(auth_client, create_staff, creat
 
     assert response.status_code == status.HTTP_403_FORBIDDEN
     assert response.data["code"] == "PERMISSION_DENIED"
+
+
+def test_related_matchcard_staff_cannot_patch_user_detail(
+    auth_client,
+    create_staff,
+    create_customer_profile,
+):
+    owner = create_staff(phone="13800138097", name="Owner红娘2")
+    related_viewer = create_staff(phone="13800138098", name="关联红娘2")
+    partner_owner = create_staff(phone="13800138099", name="另一侧红娘2")
+    target_user = create_customer_profile(
+        phone="13900139013",
+        owner=owner,
+        gender=CustomerProfile.GENDER_MALE,
+        is_in_match=True,
+    )
+    partner_user = create_customer_profile(
+        phone="13900139014",
+        owner=partner_owner,
+        gender=CustomerProfile.GENDER_FEMALE,
+        is_in_match=True,
+    )
+    MatchCard.objects.create(
+        male_user=target_user,
+        female_user=partner_user,
+        male_staff=owner,
+        female_staff=related_viewer,
+        primary_staff=owner,
+        stage=MatchCard.STAGE_STABLE_CONTACT,
+    )
+
+    response = auth_client(related_viewer).patch(
+        f"/api/v1/users/{target_user.id}/",
+        {"city": "上海"},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.data["code"] == "PERMISSION_DENIED"
+    target_user.refresh_from_db()
+    assert target_user.city == "成都"
 
 
 # ── A3: admin owner_id change tests ─────────────────────────────────────

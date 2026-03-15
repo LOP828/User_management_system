@@ -37,6 +37,24 @@
   - 完成判定：
     - 按当前文档口径与当前仓库实现方式，视为完成
 
+- **`[high priority]` A4 — 扩展用户详情可见性权限**
+  - 当前已实现：
+    - owner 可读可写
+    - admin 可读可写
+    - 配对卡关联方（`male_staff` / `female_staff` / `primary_staff`）可查看用户详情
+    - 关联方仅限只读，不获得 PATCH / PUT 权限
+    - 非关联红娘仍无权访问
+  - 当前口径：
+    - 用户详情查看范围按“任意历史/当前配对卡”处理，包含 `success / ended`
+    - 写权限仍仅限 owner 或 admin
+  - 测试现状：
+    - 已覆盖 owner 可读可写
+    - 已覆盖关联红娘可只读
+    - 已覆盖非关联红娘无权访问
+    - 已覆盖关联红娘不能写
+  - 完成判定：
+    - 当前代码和测试均满足，视为完成
+
 - **`[high priority]` A5 — 确认 success_application 阶段前置条件**
   - 当前已实现：
     - `apps/success/services.py` 已将前置阶段校验改为 `stage=stable_contact`
@@ -91,11 +109,10 @@
 
 - **`[blocker]` C1 — Phase A 修复的测试覆盖**
   - 当前已实现：
-    - A1、A3、A5 已有明确测试覆盖
+    - A1、A3、A4、A5 已有明确测试覆盖
     - A2 已覆盖部分行为
-    - 当前全量测试 `141` 条通过
+    - 当前全量测试 `145` 条通过
   - 当前缺口：
-    - A4 仍无正向“关联红娘可查看用户详情”的测试
     - A2 缺“创建用户时初始化 `last_unmatched_active_at`”测试
   - 完成判定：
     - A1-A5 全部按最新口径补齐正反例后，方可视为完成
@@ -114,17 +131,6 @@
 ---
 
 ### 未完成
-
-- **`[high priority]` A4 — 扩展用户详情可见性权限**
-  - 当前实际情况：
-    - `apps/user/services.py` 的 `can_access_user()` 仍只检查 `admin` 或 `owner_id`
-    - `UserDetailView` 通过 `require_user_access()` 直接复用这条逻辑
-    - 当前并未放开配对卡关联方（`male_staff` / `female_staff` / `primary_staff`）的详情只读权限
-  - 目标口径：
-    - matchmaker 能查看自己关联任意历史/当前配对卡中的双方用户详情（只读）
-    - 写操作仍限 owner
-  - 完成判定：
-    - 读权限和写权限拆开；用户详情 GET 放开关联红娘，PATCH 仍限 owner
 
 - **`[normal]` A6 — 统一 operation_log 字段模型**
   - 文件：`apps/oplog/models.py`、`docs/03_database_schema_v1_1_1.md`
@@ -220,12 +226,11 @@
 
 | 顺序 | 任务 | 原因 / 前置 |
 |------|------|-------------|
-| 1 | A4 | 当前用户详情权限与最新权限矩阵不一致，且需先拆读写权限 |
-| 2 | A2 收尾 + C1 补测 | 补齐 `last_unmatched_active_at` 创建初始化和对应测试 |
-| 3 | A6 | 统一 operation_log 口径，减少后续文档/实现偏差 |
-| 4 | B1 | Reminder 持久化是 B2 / B3 / C4 的前置 |
-| 5 | B2, B3 | 在现有派生 reminder 基础上补成完整模型和 API |
-| 6 | B4, B6 | Recommendation / Transfer 先补模型 |
-| 7 | B5, B7 | Recommendation / Transfer 再补服务和 API |
-| 8 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
-| 9 | C2, C3, C4, C5 | 模块完成后集中补测试与文档对齐 |
+| 1 | A2 收尾 + C1 补测 | 补齐 `last_unmatched_active_at` 创建初始化和对应测试 |
+| 2 | A6 | 统一 operation_log 口径，减少后续文档/实现偏差 |
+| 3 | B1 | Reminder 持久化是 B2 / B3 / C4 的前置 |
+| 4 | B2, B3 | 在现有派生 reminder 基础上补成完整模型和 API |
+| 5 | B4, B6 | Recommendation / Transfer 先补模型 |
+| 6 | B5, B7 | Recommendation / Transfer 再补服务和 API |
+| 7 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
+| 8 | C2, C3, C4, C5 | 模块完成后集中补测试与文档对齐 |
