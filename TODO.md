@@ -20,6 +20,20 @@
   - 完成判定：
     - 当前代码和测试均满足，视为完成
 
+- **`[blocker]` A2 — 补齐 last_unmatched_active_at 更新逻辑**
+  - 当前已实现：
+    - `create_customer_profile()` 创建用户时，初始化 `last_unmatched_active_at = created_at`
+    - `change_user_status()`: `to_status != paused` 时更新 `last_unmatched_active_at`
+    - `resume_user()`: 恢复到活跃未配对状态时更新
+    - `pause_user()`: 不更新
+    - `followup` 的 `scene=unmatched` 写入时会更新
+    - 配对卡结束回流到未配对池时会更新
+  - 测试现状：
+    - 已覆盖创建用户即初始化 baseline
+    - 已覆盖状态变更更新、pause 不更新、resume 更新、admin force→paused 不更新
+  - 完成判定：
+    - 当前代码和测试均满足，视为完成
+
 - **`[high priority]` A3 — 放开 admin 的 owner_id 变更**
   - 当前已实现：
     - 按 BR-TRANSFER-003，`admin + force=true + force_reason` 可修改 `owner_id`
@@ -65,24 +79,16 @@
   - 完成判定：
     - 当前代码和测试均满足，视为完成
 
+- **`[blocker]` C1 — Phase A 修复的测试覆盖**
+  - 当前已实现：
+    - A1-A5 已按最新口径具备明确测试覆盖
+    - 当前全量测试 `146` 条通过
+  - 完成判定：
+    - 当前代码和测试均满足，视为完成
+
 ---
 
 ### 部分完成
-
-- **`[blocker]` A2 — 补齐 last_unmatched_active_at 更新逻辑**
-  - 当前已实现：
-    - `change_user_status()`: `to_status != paused` 时更新 `last_unmatched_active_at`
-    - `resume_user()`: 恢复到活跃未配对状态时更新
-    - `pause_user()`: 不更新
-    - `followup` 的 `scene=unmatched` 写入时会更新
-    - 配对卡结束回流到未配对池时会更新
-  - 当前缺口：
-    - `create_customer_profile()` 创建用户时，仍未初始化 `last_unmatched_active_at = created_at`
-  - 测试现状：
-    - 已覆盖状态变更更新、pause 不更新、resume 更新、admin force→paused 不更新
-    - 尚未覆盖“创建用户即初始化 baseline”
-  - 完成判定：
-    - 需补齐创建初始化逻辑，并补对应测试
 
 - **`[high priority]` B2 — Reminder 服务层改造**
   - 当前已实现：
@@ -106,16 +112,6 @@
     - 与 `06_api_contract_v1_1_2.md` 中完整 reminder 生命周期仍不一致
   - 完成判定：
     - 依赖 B1、B2；补齐 complete 接口和模型化数据后完成
-
-- **`[blocker]` C1 — Phase A 修复的测试覆盖**
-  - 当前已实现：
-    - A1、A3、A4、A5 已有明确测试覆盖
-    - A2 已覆盖部分行为
-    - 当前全量测试 `145` 条通过
-  - 当前缺口：
-    - A2 缺“创建用户时初始化 `last_unmatched_active_at`”测试
-  - 完成判定：
-    - A1-A5 全部按最新口径补齐正反例后，方可视为完成
 
 - **`[normal]` C4 — Reminder 模块测试**
   - 当前已实现：
@@ -226,11 +222,10 @@
 
 | 顺序 | 任务 | 原因 / 前置 |
 |------|------|-------------|
-| 1 | A2 收尾 + C1 补测 | 补齐 `last_unmatched_active_at` 创建初始化和对应测试 |
-| 2 | A6 | 统一 operation_log 口径，减少后续文档/实现偏差 |
-| 3 | B1 | Reminder 持久化是 B2 / B3 / C4 的前置 |
-| 4 | B2, B3 | 在现有派生 reminder 基础上补成完整模型和 API |
-| 5 | B4, B6 | Recommendation / Transfer 先补模型 |
-| 6 | B5, B7 | Recommendation / Transfer 再补服务和 API |
-| 7 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
-| 8 | C2, C3, C4, C5 | 模块完成后集中补测试与文档对齐 |
+| 1 | A6 | 统一 operation_log 口径，减少后续文档/实现偏差 |
+| 2 | B1 | Reminder 持久化是 B2 / B3 / C4 的前置 |
+| 3 | B2, B3 | 在现有派生 reminder 基础上补成完整模型和 API |
+| 4 | B4, B6 | Recommendation / Transfer 先补模型 |
+| 5 | B5, B7 | Recommendation / Transfer 再补服务和 API |
+| 6 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
+| 7 | C2, C3, C4, C5 | 模块完成后集中补测试与文档对齐 |

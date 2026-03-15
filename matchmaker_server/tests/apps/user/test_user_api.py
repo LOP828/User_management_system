@@ -73,6 +73,36 @@ def test_create_user_overrides_system_fields_and_writes_initial_status_history(
     assert history.changed_by_id == matchmaker_staff.id
 
 
+def test_create_user_initializes_last_unmatched_active_at_to_created_at(
+    auth_client,
+    matchmaker_staff,
+    create_payment_level,
+):
+    client = auth_client(matchmaker_staff)
+    payment_level = create_payment_level()
+
+    response = client.post(
+        "/api/v1/users/",
+        {
+            "name": "王五",
+            "gender": "male",
+            "age": 29,
+            "phone": "13900139010",
+            "wechat": "wangwu_wx",
+            "city": "成都",
+            "payment_level_id": payment_level.id,
+            "owner_id": matchmaker_staff.id,
+            "basic_requirement": "希望找成都本地",
+        },
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = CustomerProfile.objects.get(id=response.data["id"])
+    assert user.last_unmatched_active_at == user.created_at
+
+
 def test_create_user_computes_profile_complete_when_payload_is_complete(
     auth_client,
     matchmaker_staff,

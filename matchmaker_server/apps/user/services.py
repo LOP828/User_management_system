@@ -200,6 +200,8 @@ def create_customer_profile(validated_data, actor):
     payload["is_profile_complete"] = calculate_profile_complete(payload)
     payload["is_in_match"] = False
     user = CustomerProfile.objects.create(**payload)
+    user.last_unmatched_active_at = user.created_at
+    user.save(update_fields=["last_unmatched_active_at", "updated_at"])
     create_initial_status_history(user, actor)
     return user
 
