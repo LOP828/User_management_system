@@ -85,7 +85,7 @@
   - 当前已实现：
     - A1-A5 已按最新口径具备明确测试覆盖
     - A2 相关测试工厂默认 baseline 已与当前创建语义对齐；如需显式构造 `NULL` baseline，仍可在单测中显式传值
-    - 当前全量测试 `158` 条通过
+    - 当前全量测试 `167` 条通过
   - 完成判定：
     - 当前代码和测试均满足，视为完成
 
@@ -105,26 +105,40 @@
   - 完成判定：
     - 当前模型、迁移和基础测试均满足，视为完成
 
+- **`[high priority]` B2 — Reminder 服务层改造**
+  - 当前已实现：
+    - `apps/reminder/services.py` 已补齐 Reminder 表基础 service：
+      - `build_persisted_reminder_queryset()`
+      - `create_reminder()`
+      - `process_reminder()`
+      - `expire_reminder()`
+      - `expire_target_reminders()`
+    - `refresh_match_card_next_remind_at()` 已兼容 Reminder 表：
+      - 若该配对卡已存在持久化回访类 Reminder，则按 Reminder 表中“未完成记录最早 remind_at”回写
+      - 若该配对卡尚无持久化 Reminder，则继续沿用原派生式逻辑
+    - `first_meet_overdue` 处理时，已支持自动生成 `scene=unmatched` 的跟进记录，并更新目标用户 `last_action_at / last_unmatched_active_at`
+  - 当前口径：
+    - 当前 `/reminders/` 列表仍走派生逻辑，不切换到 Reminder 表
+    - B2 先提供 Reminder 表的写入 / 查询 / 处理 / 失效基础能力，为 B3 API 接入打底，避免现有提醒列表 `id` 语义突变
+  - 测试现状：
+    - 已覆盖 Reminder 创建
+    - 已覆盖 Reminder 持久化 query 的权限与筛选
+    - 已覆盖普通 Reminder 处理
+    - 已覆盖 `first_meet_overdue` 处理闭环
+    - 已覆盖 Reminder 失效 / 取消
+    - 已覆盖 `refresh_match_card_next_remind_at()` 与现有派生逻辑的兼容行为
+    - 现有 reminder 派生列表测试继续通过
+  - 完成判定：
+    - 当前服务层实现和测试均满足，视为完成
+
 ---
 
 ### 部分完成
 
-- **`[high priority]` B2 — Reminder 服务层改造**
-  - 当前已实现：
-    - `Reminder` 模型与迁移已落地
-    - `apps/reminder/services.py` 已有派生式 reminder 计算逻辑
-    - 已实现 `refresh_match_card_next_remind_at()`，会回写 `match_card.next_remind_at`
-    - 已有针对已配对回访提醒的权限过滤和时间过滤逻辑
-  - 当前缺口：
-    - Reminder 表尚未接入现有服务层读写
-    - 仍缺创建 / 完成 / 取消 Reminder 的 service 函数
-    - 当前 reminder 仍是“按配对卡和跟进记录即时派生”，不是文档要求的持久化模型
-  - 完成判定：
-    - 补齐 Reminder 表写入、状态流转、覆盖/过期逻辑后完成
-
 - **`[high priority]` B3 — Reminder API 端点**
   - 当前已实现：
     - Reminder 表已存在
+    - Reminder 服务层已具备持久化 query / create / process / expire 基础函数
     - `GET /reminders/` 已存在
     - 当前接口可按权限返回派生式 reminder 列表，并支持部分筛选
   - 当前缺口：
@@ -138,9 +152,9 @@
   - 当前已实现：
     - 已有 Reminder migration / model schema 基础测试
     - 已有 reminder 列表相关测试
+    - 已有 Reminder 服务层持久化 query / create / process / expire 测试
     - 已覆盖派生 reminder 的权限过滤、逾期展示、manual follow-up 影响、筛选行为
   - 当前缺口：
-    - 仍无 Reminder 服务层持久化读写测试
     - 仍无 `complete` API 测试
     - `tasks.py` 仍是占位，缺 Celery task 单元测试
   - 完成判定：
@@ -238,7 +252,7 @@
 | 顺序 | 任务 | 原因 / 前置 |
 |------|------|-------------|
 | 1 | A6 | 统一 operation_log 口径，减少后续文档/实现偏差 |
-| 2 | B2, B3 | 在现有派生 reminder 基础上补成完整模型和 API |
+| 2 | B3 | 在现有 B2 服务层基础上补齐 Reminder API 端点 |
 | 3 | B4, B6 | Recommendation / Transfer 先补模型 |
 | 4 | B5, B7 | Recommendation / Transfer 再补服务和 API |
 | 5 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
