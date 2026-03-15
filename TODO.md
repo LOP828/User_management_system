@@ -85,9 +85,25 @@
   - 当前已实现：
     - A1-A5 已按最新口径具备明确测试覆盖
     - A2 相关测试工厂默认 baseline 已与当前创建语义对齐；如需显式构造 `NULL` baseline，仍可在单测中显式传值
-    - 当前全量测试 `149` 条通过
+    - 当前全量测试 `158` 条通过
   - 完成判定：
     - 当前代码和测试均满足，视为完成
+
+- **`[blocker]` B1 — Reminder 模型与迁移**
+  - 当前已实现：
+    - `apps/reminder/models.py` 已落地 `Reminder` 模型
+    - `apps/reminder/migrations/0001_initial.py` 已创建 `reminder` 表
+    - 已按文档补齐 `target_type / target_id / staff_id / remind_type / remind_at / status / processed_at / is_manual / created_at`
+    - 已补齐 `target_type`、`remind_type`、`status` 的枚举约束
+    - 已补齐 `staff_id + status + remind_at`、`target_type + target_id`、`remind_at + status` 三组索引
+  - 当前口径：
+    - B1 仅完成 Reminder 表结构与迁移，不改现有派生式 reminder 服务
+    - 当前 `/reminders/` 仍沿用派生逻辑，Reminder 表将在 B2/B3 再接入
+  - 测试现状：
+    - 已覆盖 migration 建表、字段、外键、索引、基础 check constraint
+    - 已覆盖 Reminder 模型默认值与非法枚举值约束
+  - 完成判定：
+    - 当前模型、迁移和基础测试均满足，视为完成
 
 ---
 
@@ -95,18 +111,20 @@
 
 - **`[high priority]` B2 — Reminder 服务层改造**
   - 当前已实现：
+    - `Reminder` 模型与迁移已落地
     - `apps/reminder/services.py` 已有派生式 reminder 计算逻辑
     - 已实现 `refresh_match_card_next_remind_at()`，会回写 `match_card.next_remind_at`
     - 已有针对已配对回访提醒的权限过滤和时间过滤逻辑
   - 当前缺口：
-    - `Reminder` 模型仍未落地，提醒记录未持久化
+    - Reminder 表尚未接入现有服务层读写
     - 仍缺创建 / 完成 / 取消 Reminder 的 service 函数
     - 当前 reminder 仍是“按配对卡和跟进记录即时派生”，不是文档要求的持久化模型
   - 完成判定：
-    - 依赖 B1；落 Reminder 表后补齐服务层写入、更新、完成逻辑
+    - 补齐 Reminder 表写入、状态流转、覆盖/过期逻辑后完成
 
 - **`[high priority]` B3 — Reminder API 端点**
   - 当前已实现：
+    - Reminder 表已存在
     - `GET /reminders/` 已存在
     - 当前接口可按权限返回派生式 reminder 列表，并支持部分筛选
   - 当前缺口：
@@ -114,18 +132,19 @@
     - 当前 API 仍未基于 `Reminder` 表提供持久化数据
     - 与 `06_api_contract_v1_1_2.md` 中完整 reminder 生命周期仍不一致
   - 完成判定：
-    - 依赖 B1、B2；补齐 complete 接口和模型化数据后完成
+    - 依赖 B2；补齐 complete 接口和模型化数据后完成
 
 - **`[normal]` C4 — Reminder 模块测试**
   - 当前已实现：
+    - 已有 Reminder migration / model schema 基础测试
     - 已有 reminder 列表相关测试
     - 已覆盖派生 reminder 的权限过滤、逾期展示、manual follow-up 影响、筛选行为
   - 当前缺口：
-    - 仍无 Reminder 持久化记录测试
+    - 仍无 Reminder 服务层持久化读写测试
     - 仍无 `complete` API 测试
     - `tasks.py` 仍是占位，缺 Celery task 单元测试
   - 完成判定：
-    - 依赖 B1、B2、B3；补齐 reminder 持久化和 API 后扩展测试
+    - 依赖 B2、B3；补齐 reminder 持久化和 API 后扩展测试
 
 ---
 
@@ -139,13 +158,6 @@
     - 当前缺少 `operator_id + created_at` 联合索引
   - 完成判定：
     - 文档与代码字段命名统一，并补齐索引说明/迁移
-
-- **`[blocker]` B1 — Reminder 模型与迁移**
-  - 文件：`apps/reminder/models.py`
-  - 当前实际情况：
-    - 仍为空占位，`apps/reminder/migrations/` 下无业务迁移
-  - 完成判定：
-    - 创建 `Reminder` 表并通过迁移
 
 - **`[high priority]` B4 — Recommendation 模型与迁移**
   - 文件：`apps/recommendation/models.py`
@@ -226,12 +238,11 @@
 | 顺序 | 任务 | 原因 / 前置 |
 |------|------|-------------|
 | 1 | A6 | 统一 operation_log 口径，减少后续文档/实现偏差 |
-| 2 | B1 | Reminder 持久化是 B2 / B3 / C4 的前置 |
-| 3 | B2, B3 | 在现有派生 reminder 基础上补成完整模型和 API |
-| 4 | B4, B6 | Recommendation / Transfer 先补模型 |
-| 5 | B5, B7 | Recommendation / Transfer 再补服务和 API |
-| 6 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
-| 7 | C2, C3, C4, C5 | 模块完成后集中补测试与文档对齐 |
+| 2 | B2, B3 | 在现有派生 reminder 基础上补成完整模型和 API |
+| 3 | B4, B6 | Recommendation / Transfer 先补模型 |
+| 4 | B5, B7 | Recommendation / Transfer 再补服务和 API |
+| 5 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
+| 6 | C2, C3, C4, C5 | 模块完成后集中补测试与文档对齐 |
 
 ---
 
