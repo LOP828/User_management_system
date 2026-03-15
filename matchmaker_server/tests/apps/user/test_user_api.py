@@ -103,6 +103,38 @@ def test_create_user_initializes_last_unmatched_active_at_to_created_at(
     assert user.last_unmatched_active_at == user.created_at
 
 
+def test_admin_create_user_initializes_last_unmatched_active_at_to_created_at(
+    auth_client,
+    admin_staff,
+    matchmaker_staff,
+    create_payment_level,
+):
+    client = auth_client(admin_staff)
+    payment_level = create_payment_level()
+
+    response = client.post(
+        "/api/v1/users/",
+        {
+            "name": "管理员建档用户",
+            "gender": "female",
+            "age": 27,
+            "phone": "13900139013",
+            "wechat": "admin_created_user",
+            "city": "成都",
+            "payment_level_id": payment_level.id,
+            "owner_id": matchmaker_staff.id,
+            "basic_requirement": "希望找成都本地",
+        },
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+    user = CustomerProfile.objects.get(id=response.data["id"])
+    assert user.owner_id == matchmaker_staff.id
+    assert user.last_unmatched_active_at == user.created_at
+
+
 def test_create_user_computes_profile_complete_when_payload_is_complete(
     auth_client,
     matchmaker_staff,
@@ -560,6 +592,73 @@ def test_admin_change_owner_id_updates_active_female_side_match_cards_only(
     assert active_card.male_staff_id == male_owner.id
     assert active_card.primary_staff_id == primary_staff.id
     assert success_card.female_staff_id == old_owner.id
+
+
+def test_admin_change_owner_id_does_not_touch_unrelated_active_cards_or_users(
+    auth_client,
+    admin_staff,
+    create_staff,
+    create_customer_profile,
+):
+    old_owner = create_staff(phone="13800138214", name="旧红娘4")
+    new_owner = create_staff(phone="13800138215", name="新红娘4")
+    target_partner_owner = create_staff(phone="13800138216", name="目标女方红娘")
+    unrelated_partner_owner = create_staff(phone="13800138217", name="无关女方红娘")
+    primary_staff = create_staff(phone="13800138218", name="主操作红娘3")
+
+    target_user = create_customer_profile(phone="13900139209", owner=old_owner, is_in_match=True)
+    target_partner = create_customer_profile(
+        phone="13900139210",
+        owner=target_partner_owner,
+        gender=CustomerProfile.GENDER_FEMALE,
+        is_in_match=True,
+    )
+    unrelated_user = create_customer_profile(phone="13900139211", owner=old_owner, is_in_match=True)
+    unrelated_partner = create_customer_profile(
+        phone="13900139212",
+        owner=unrelated_partner_owner,
+        gender=CustomerProfile.GENDER_FEMALE,
+        is_in_match=True,
+    )
+
+    target_card = MatchCard.objects.create(
+        male_user=target_user,
+        female_user=target_partner,
+        male_staff=old_owner,
+        female_staff=target_partner_owner,
+        primary_staff=primary_staff,
+        stage=MatchCard.STAGE_INITIAL_CONTACT,
+    )
+    unrelated_card = MatchCard.objects.create(
+        male_user=unrelated_user,
+        female_user=unrelated_partner,
+        male_staff=old_owner,
+        female_staff=unrelated_partner_owner,
+        primary_staff=primary_staff,
+        stage=MatchCard.STAGE_STABLE_CONTACT,
+    )
+
+    response = auth_client(admin_staff).patch(
+        f"/api/v1/users/{target_user.id}/",
+        {
+            "owner_id": new_owner.id,
+            "force": True,
+            "force_reason": "只调整目标用户负责人",
+        },
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    target_user.refresh_from_db()
+    target_card.refresh_from_db()
+    unrelated_user.refresh_from_db()
+    unrelated_card.refresh_from_db()
+    assert target_user.owner_id == new_owner.id
+    assert target_card.male_staff_id == new_owner.id
+    assert unrelated_user.owner_id == old_owner.id
+    assert unrelated_card.male_staff_id == old_owner.id
+    assert unrelated_card.female_staff_id == unrelated_partner_owner.id
+    assert unrelated_card.primary_staff_id == primary_staff.id
 
 
 def test_matchmaker_cannot_change_owner_id(

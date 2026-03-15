@@ -377,7 +377,8 @@ def test_change_status_updates_last_unmatched_active_at(
     create_customer_profile,
 ):
     user = create_customer_profile(pool_status=CustomerProfile.STATUS_NEW_PENDING)
-    assert user.last_unmatched_active_at is None
+    original_last_unmatched_active_at = user.last_unmatched_active_at
+    assert original_last_unmatched_active_at == user.created_at
 
     response = auth_client(matchmaker_staff).post(
         f"/api/v1/users/{user.id}/change-status/",
@@ -388,6 +389,8 @@ def test_change_status_updates_last_unmatched_active_at(
     assert response.status_code == status.HTTP_200_OK
     user.refresh_from_db()
     assert user.last_unmatched_active_at is not None
+    assert user.last_unmatched_active_at > original_last_unmatched_active_at
+    assert user.last_unmatched_active_at == user.last_action_at
 
 
 def test_pause_does_not_update_last_unmatched_active_at(
@@ -397,7 +400,8 @@ def test_pause_does_not_update_last_unmatched_active_at(
     create_reason_enum,
 ):
     user = create_customer_profile(pool_status=CustomerProfile.STATUS_NEW_PENDING)
-    assert user.last_unmatched_active_at is None
+    original_last_unmatched_active_at = user.last_unmatched_active_at
+    assert original_last_unmatched_active_at == user.created_at
     reason = create_reason_enum(category=ReasonEnum.CATEGORY_PAUSE, label="暂停A2测试", sort_order=200)
 
     response = auth_client(matchmaker_staff).post(
@@ -408,7 +412,7 @@ def test_pause_does_not_update_last_unmatched_active_at(
 
     assert response.status_code == status.HTTP_200_OK
     user.refresh_from_db()
-    assert user.last_unmatched_active_at is None
+    assert user.last_unmatched_active_at == original_last_unmatched_active_at
 
 
 def test_resume_updates_last_unmatched_active_at(
@@ -420,7 +424,8 @@ def test_resume_updates_last_unmatched_active_at(
         pool_status=CustomerProfile.STATUS_PAUSED,
         pre_pause_status=CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
     )
-    assert user.last_unmatched_active_at is None
+    original_last_unmatched_active_at = user.last_unmatched_active_at
+    assert original_last_unmatched_active_at == user.created_at
 
     response = auth_client(matchmaker_staff).post(
         f"/api/v1/users/{user.id}/resume/",
@@ -431,6 +436,8 @@ def test_resume_updates_last_unmatched_active_at(
     assert response.status_code == status.HTTP_200_OK
     user.refresh_from_db()
     assert user.last_unmatched_active_at is not None
+    assert user.last_unmatched_active_at > original_last_unmatched_active_at
+    assert user.last_unmatched_active_at == user.last_action_at
 
 
 def test_admin_force_to_paused_does_not_update_last_unmatched_active_at(
@@ -439,7 +446,8 @@ def test_admin_force_to_paused_does_not_update_last_unmatched_active_at(
     create_customer_profile,
 ):
     user = create_customer_profile(pool_status=CustomerProfile.STATUS_NEW_PENDING)
-    assert user.last_unmatched_active_at is None
+    original_last_unmatched_active_at = user.last_unmatched_active_at
+    assert original_last_unmatched_active_at == user.created_at
 
     response = auth_client(admin_staff).post(
         f"/api/v1/users/{user.id}/change-status/",
@@ -453,4 +461,45 @@ def test_admin_force_to_paused_does_not_update_last_unmatched_active_at(
 
     assert response.status_code == status.HTTP_200_OK
     user.refresh_from_db()
-    assert user.last_unmatched_active_at is None
+    assert user.last_unmatched_active_at == original_last_unmatched_active_at
+
+
+def test_api_created_user_change_status_overwrites_last_unmatched_active_at(
+    auth_client,
+    matchmaker_staff,
+    create_payment_level,
+):
+    client = auth_client(matchmaker_staff)
+    payment_level = create_payment_level()
+
+    create_response = client.post(
+        "/api/v1/users/",
+        {
+            "name": "A2状态更新用户",
+            "gender": CustomerProfile.GENDER_MALE,
+            "age": 31,
+            "phone": "13900139123",
+            "wechat": "a2_status_user",
+            "city": "成都",
+            "payment_level_id": payment_level.id,
+            "owner_id": matchmaker_staff.id,
+            "basic_requirement": "希望找成都本地",
+        },
+        format="json",
+    )
+
+    assert create_response.status_code == status.HTTP_201_CREATED
+    user = CustomerProfile.objects.get(id=create_response.data["id"])
+    original_last_unmatched_active_at = user.last_unmatched_active_at
+    assert original_last_unmatched_active_at == user.created_at
+
+    response = client.post(
+        f"/api/v1/users/{user.id}/change-status/",
+        {"to_status": CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    user.refresh_from_db()
+    assert user.last_unmatched_active_at > original_last_unmatched_active_at
+    assert user.last_unmatched_active_at == user.last_action_at

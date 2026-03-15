@@ -29,7 +29,9 @@
     - `followup` 的 `scene=unmatched` 写入时会更新
     - 配对卡结束回流到未配对池时会更新
   - 测试现状：
-    - 已覆盖创建用户即初始化 baseline
+    - 已覆盖红娘 API 创建用户即初始化 baseline
+    - 已覆盖 admin API 创建用户即初始化 baseline
+    - 已覆盖创建后再做状态变更时，`last_unmatched_active_at` 被后续更新时间正确覆盖
     - 已覆盖状态变更更新、pause 不更新、resume 更新、admin force→paused 不更新
   - 完成判定：
     - 当前代码和测试均满足，视为完成
@@ -47,7 +49,7 @@
     - 当前仓库中的 reminder 为派生式列表，接收人取自进行中配对卡的侧边 staff 字段；因此配对卡侧边字段同步后，当前 reminder 接收人语义已自动对齐
   - 测试现状：
     - 已覆盖 admin 成功、缺 force 被拒、缺 reason 被拒、matchmaker 被拒
-    - 已覆盖男方侧进行中配对卡同步、女方侧进行中配对卡同步、非进行中配对卡不误改、derived reminder 接收人切换、`last_action_at` 更新
+    - 已覆盖男方侧进行中配对卡同步、女方侧进行中配对卡同步、非进行中配对卡不误改、无关用户/无关 active 配对卡不误伤、derived reminder 接收人切换、`last_action_at` 更新
   - 完成判定：
     - 按当前文档口径与当前仓库实现方式，视为完成
 
@@ -82,7 +84,8 @@
 - **`[blocker]` C1 — Phase A 修复的测试覆盖**
   - 当前已实现：
     - A1-A5 已按最新口径具备明确测试覆盖
-    - 当前全量测试 `146` 条通过
+    - A2 相关测试工厂默认 baseline 已与当前创建语义对齐；如需显式构造 `NULL` baseline，仍可在单测中显式传值
+    - 当前全量测试 `149` 条通过
   - 完成判定：
     - 当前代码和测试均满足，视为完成
 
@@ -229,3 +232,19 @@
 | 5 | B5, B7 | Recommendation / Transfer 再补服务和 API |
 | 6 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
 | 7 | C2, C3, C4, C5 | 模块完成后集中补测试与文档对齐 |
+
+---
+
+### 后续清理项
+
+- **`[normal]` 清理 last_unmatched_active_at 的 NULL baseline 历史/绕过链路问题**
+  - 当前情况：
+    - 通过正常用户创建链路，`last_unmatched_active_at` 已初始化为 `created_at`
+    - 但历史旧数据，以及测试工厂或未来绕过 service 直接 `CustomerProfile.objects.create()` 的路径，仍可能留下 `last_unmatched_active_at = NULL`
+  - 为什么现在不阻塞提交：
+    - A2 当前验收范围仅要求补齐正常创建链路初始化，现有状态流转、pause/resume、未配对跟进、配对结束回流逻辑均未被破坏
+    - 当前仓库尚未落地基于该字段的完整 reminder 持久化与超时计算闭环，因此该问题属于后续数据治理与兜底完善项
+  - 后续建议动作：
+    - 增加一次性数据修复脚本或 migration backfill，将历史 `NULL` baseline 回填为合适基准
+    - 为后续依赖该字段的提醒、超时判断、未配对池停留时长计算增加 `NULL` 兜底策略
+    - 统一测试工厂与创建辅助方法，避免继续直接造出 `NULL` baseline

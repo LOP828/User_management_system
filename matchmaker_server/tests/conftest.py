@@ -94,6 +94,7 @@ def create_customer_profile(db, matchmaker_staff, create_payment_level):
     def factory(**kwargs):
         payment_level = kwargs.pop("payment_level", None) or create_payment_level()
         owner = kwargs.pop("owner", None) or matchmaker_staff
+        explicit_last_unmatched_active_at = "last_unmatched_active_at" in kwargs
         defaults = {
             "name": "张三",
             "gender": CustomerProfile.GENDER_MALE,
@@ -111,6 +112,10 @@ def create_customer_profile(db, matchmaker_staff, create_payment_level):
             "tags": [],
         }
         defaults.update(kwargs)
-        return CustomerProfile.objects.create(**defaults)
+        user = CustomerProfile.objects.create(**defaults)
+        if not explicit_last_unmatched_active_at and user.last_unmatched_active_at is None:
+            user.last_unmatched_active_at = user.created_at
+            user.save(update_fields=["last_unmatched_active_at", "updated_at"])
+        return user
 
     return factory
