@@ -15,3 +15,15 @@ class ReminderListItemSerializer(serializers.Serializer):
     status = serializers.CharField()
     is_manual = serializers.BooleanField()
     created_at = serializers.DateTimeField()
+
+
+class ReminderProcessRequestSerializer(serializers.Serializer):
+    overdue_reason_id = serializers.IntegerField(required=False)
+    overdue_reason_note = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=255)
+
+
+class ReminderProcessResponseSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    status = serializers.CharField()
+    processed_at = serializers.DateTimeField()
+    created_follow_up_id = serializers.IntegerField(required=False)

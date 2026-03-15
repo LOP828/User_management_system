@@ -85,7 +85,7 @@
   - 当前已实现：
     - A1-A5 已按最新口径具备明确测试覆盖
     - A2 相关测试工厂默认 baseline 已与当前创建语义对齐；如需显式构造 `NULL` baseline，仍可在单测中显式传值
-    - 当前全量测试 `172` 条通过
+    - 当前全量测试 `177` 条通过
   - 完成判定：
     - 当前代码和测试均满足，视为完成
 
@@ -161,21 +161,26 @@
     - Reminder 服务层已具备持久化 query / create / process / expire 基础函数
     - `GET /reminders/` 已存在
     - 当前接口可按权限返回派生式 reminder 列表，并支持部分筛选
+    - `POST /reminders/{id}/process/` 已实现，并基于 persisted `Reminder.id` 调用 B2 service
   - 当前缺口：
-    - `POST /reminders/{id}/complete/` 未实现
-    - 当前 API 仍未基于 `Reminder` 表提供持久化数据
+    - 当前 API 仍是混合模式：
+      - `GET /reminders/` 继续走派生式列表
+      - `POST /reminders/{id}/process/` 只处理 persisted `Reminder.id`
+    - 尚未处理旧合成 reminder id 与 persisted `Reminder.id` 的兼容
+    - `POST /reminders/manual/` 未实现
     - 与 `06_api_contract_v1_1_2.md` 中完整 reminder 生命周期仍不一致
   - 完成判定：
-    - 依赖 B2；补齐 complete 接口和模型化数据后完成
+    - 在现有 `/process/` 基础上，补齐 manual 端点和列表模型化切换后完成
 
 - **`[normal]` C4 — Reminder 模块测试**
   - 当前已实现：
     - 已有 Reminder migration / model schema 基础测试
     - 已有 reminder 列表相关测试
     - 已有 Reminder 服务层持久化 query / create / process / expire 测试
+    - 已有 `/reminders/{id}/process/` API 测试
     - 已覆盖派生 reminder 的权限过滤、逾期展示、manual follow-up 影响、筛选行为
   - 当前缺口：
-    - 仍无 `complete` API 测试
+    - 仍无 `/reminders/manual/` API 测试
     - `tasks.py` 仍是占位，缺 Celery task 单元测试
   - 完成判定：
     - 依赖 B2、B3；补齐 reminder 持久化和 API 后扩展测试

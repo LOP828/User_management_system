@@ -4,8 +4,11 @@ from uuid import uuid4
 import pytest
 from django.utils import timezone
 
+from apps.config_mgmt.models import ReasonEnum
 from apps.followup.models import FollowUpRecord
 from apps.matchcard.models import MatchCard
+from apps.reminder.models import Reminder
+from apps.reminder.services import create_reminder
 from apps.user.models import CustomerProfile
 
 
@@ -146,3 +149,150 @@ def test_status_and_target_type_filters_apply_to_derived_reminders(auth_client, 
     assert pending_response.data["count"] == 1
     assert processed_response.status_code == 200
     assert processed_response.data["count"] == 0
+
+
+def test_receiver_can_process_persisted_reminder(auth_client, create_customer_profile, create_staff):
+    owner = create_staff(name="处理提醒红娘")
+    user = create_customer_profile(owner=owner, phone="13902000001", wechat="reminder_process_ok")
+    reminder = create_reminder(
+        target_type=Reminder.TARGET_USER,
+        target_id=user.id,
+        staff=owner,
+        remind_type=Reminder.TYPE_FOLLOWUP_TIMEOUT,
+        remind_at=timezone.now() + timedelta(hours=2),
+    )
+
+    response = auth_client(owner).post(
+        f"/api/v1/reminders/{reminder.id}/process/",
+        {},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["id"] == reminder.id
+    assert response.data["status"] == Reminder.STATUS_PROCESSED
+    assert response.data["processed_at"]
+    reminder.refresh_from_db()
+    user.refresh_from_db()
+    assert reminder.status == Reminder.STATUS_PROCESSED
+    assert reminder.processed_at is not None
+    assert user.last_action_at is not None
+
+
+def test_non_receiver_cannot_process_persisted_reminder(
+    auth_client,
+    create_customer_profile,
+    create_staff,
+):
+    owner = create_staff(name="提醒接收红娘")
+    other_staff = create_staff(name="无权限处理红娘")
+    user = create_customer_profile(owner=owner, phone="13902000002", wechat="reminder_process_denied")
+    reminder = create_reminder(
+        target_type=Reminder.TARGET_USER,
+        target_id=user.id,
+        staff=owner,
+        remind_type=Reminder.TYPE_NORMAL,
+        remind_at=timezone.now() + timedelta(hours=1),
+    )
+
+    response = auth_client(other_staff).post(
+        f"/api/v1/reminders/{reminder.id}/process/",
+        {},
+        format="json",
+    )
+
+    assert response.status_code == 403
+    assert response.data["code"] == "PERMISSION_DENIED"
+    reminder.refresh_from_db()
+    assert reminder.status == Reminder.STATUS_PENDING
+
+
+def test_processed_reminder_cannot_be_processed_again(auth_client, create_customer_profile, create_staff):
+    owner = create_staff(name="重复处理红娘")
+    user = create_customer_profile(owner=owner, phone="13902000003", wechat="reminder_process_invalid_status")
+    reminder = create_reminder(
+        target_type=Reminder.TARGET_USER,
+        target_id=user.id,
+        staff=owner,
+        remind_type=Reminder.TYPE_FOLLOWUP_TIMEOUT,
+        remind_at=timezone.now() + timedelta(hours=1),
+        status_value=Reminder.STATUS_PROCESSED,
+    )
+
+    response = auth_client(owner).post(
+        f"/api/v1/reminders/{reminder.id}/process/",
+        {},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.data["code"] == "REMINDER_STATUS_TRANSITION_INVALID"
+    reminder.refresh_from_db()
+    assert reminder.status == Reminder.STATUS_PROCESSED
+
+
+def test_first_meet_overdue_process_requires_overdue_reason(
+    auth_client,
+    create_customer_profile,
+    create_staff,
+):
+    owner = create_staff(name="未首见处理红娘")
+    user = create_customer_profile(owner=owner, phone="13902000004", wechat="reminder_first_meet_overdue")
+    reminder = create_reminder(
+        target_type=Reminder.TARGET_USER,
+        target_id=user.id,
+        staff=owner,
+        remind_type=Reminder.TYPE_FIRST_MEET_OVERDUE,
+        remind_at=timezone.now() - timedelta(days=1),
+    )
+
+    response = auth_client(owner).post(
+        f"/api/v1/reminders/{reminder.id}/process/",
+        {},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.data["code"] == "OVERDUE_REASON_REQUIRED"
+    reminder.refresh_from_db()
+    assert reminder.status == Reminder.STATUS_PENDING
+    assert FollowUpRecord.objects.filter(user=user, scene=FollowUpRecord.SCENE_UNMATCHED).count() == 0
+
+
+def test_first_meet_overdue_process_accepts_valid_reason(
+    auth_client,
+    create_customer_profile,
+    create_staff,
+    create_reason_enum,
+):
+    owner = create_staff(name="未首见闭环红娘")
+    user = create_customer_profile(owner=owner, phone="13902000005", wechat="reminder_first_meet_reason")
+    overdue_reason = create_reason_enum(
+        category=ReasonEnum.CATEGORY_OVERDUE,
+        label="库存不足",
+    )
+    reminder = create_reminder(
+        target_type=Reminder.TARGET_USER,
+        target_id=user.id,
+        staff=owner,
+        remind_type=Reminder.TYPE_FIRST_MEET_OVERDUE,
+        remind_at=timezone.now() - timedelta(days=1),
+    )
+
+    response = auth_client(owner).post(
+        f"/api/v1/reminders/{reminder.id}/process/",
+        {
+            "overdue_reason_id": overdue_reason.id,
+            "overdue_reason_note": "已重新安排推荐计划",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["status"] == Reminder.STATUS_PROCESSED
+    assert "created_follow_up_id" in response.data
+    reminder.refresh_from_db()
+    follow_up = FollowUpRecord.objects.get(id=response.data["created_follow_up_id"])
+    assert reminder.status == Reminder.STATUS_PROCESSED
+    assert follow_up.user_id == user.id
+    assert follow_up.overdue_reason_id == overdue_reason.id
