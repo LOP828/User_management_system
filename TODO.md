@@ -85,7 +85,7 @@
   - 当前已实现：
     - A1-A5 已按最新口径具备明确测试覆盖
     - A2 相关测试工厂默认 baseline 已与当前创建语义对齐；如需显式构造 `NULL` baseline，仍可在单测中显式传值
-    - 当前全量测试 `167` 条通过
+    - 当前全量测试 `172` 条通过
   - 完成判定：
     - 当前代码和测试均满足，视为完成
 
@@ -131,6 +131,26 @@
   - 完成判定：
     - 当前服务层实现和测试均满足，视为完成
 
+- **`[normal]` A6 — 统一 operation_log 字段模型**
+  - 当前已实现：
+    - `operation_log` 底层 canonical schema 明确保持为 `operator / action / target_type / target_id / before_json / after_json / reason / created_at`
+    - 已补齐索引：
+      - `target_type + target_id + created_at`
+      - `operator_id + created_at`
+      - `created_at`
+    - 已新增 `apps/oplog/services.py::create_operation_log()` 共享 helper
+    - `user / matchcard / success` 现有写日志入口已最小收口到 helper，不再分散直接写 `OperationLog.objects.create()` 
+    - `docs/03_database_schema_v1_1_1.md` 与 `docs/06_api_contract_v1_1_2.md` 已按 `before_json / after_json` 口径对齐
+  - 当前口径：
+    - `field_changed / old_value / new_value` 不再作为底层 schema 字段；如未来需要，只作为展示层派生口径
+    - 本次不实现 operation_log API；查询接口仍归 B8
+  - 测试现状：
+    - 已覆盖 model 字段与索引 contract
+    - 已覆盖 migration 后表结构与索引
+    - 已覆盖 `create_operation_log()` helper 基本写入
+  - 完成判定：
+    - 当前模型、迁移、helper、文档和最小测试已形成闭环，视为完成
+
 ---
 
 ### 部分完成
@@ -163,15 +183,6 @@
 ---
 
 ### 未完成
-
-- **`[normal]` A6 — 统一 operation_log 字段模型**
-  - 文件：`apps/oplog/models.py`、`docs/03_database_schema_v1_1_1.md`
-  - 当前实际情况：
-    - 代码实现为 `before_json / after_json`
-    - 文档仍定义为 `field_changed / old_value / new_value`
-    - 当前缺少 `operator_id + created_at` 联合索引
-  - 完成判定：
-    - 文档与代码字段命名统一，并补齐索引说明/迁移
 
 - **`[high priority]` B4 — Recommendation 模型与迁移**
   - 文件：`apps/recommendation/models.py`
@@ -251,12 +262,11 @@
 
 | 顺序 | 任务 | 原因 / 前置 |
 |------|------|-------------|
-| 1 | A6 | 统一 operation_log 口径，减少后续文档/实现偏差 |
-| 2 | B3 | 在现有 B2 服务层基础上补齐 Reminder API 端点 |
-| 3 | B4, B6 | Recommendation / Transfer 先补模型 |
-| 4 | B5, B7 | Recommendation / Transfer 再补服务和 API |
-| 5 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
-| 6 | C2, C3, C4, C5 | 模块完成后集中补测试与文档对齐 |
+| 1 | B3 | 在现有 B2 服务层基础上补齐 Reminder API 端点 |
+| 2 | B4, B6 | Recommendation / Transfer 先补模型 |
+| 3 | B5, B7 | Recommendation / Transfer 再补服务和 API |
+| 4 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
+| 5 | C2, C3, C4, C5 | 模块完成后集中补测试与文档对齐 |
 
 ---
 

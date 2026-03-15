@@ -10,7 +10,7 @@ from apps.config_mgmt.models import ReasonEnum
 from apps.followup.services import get_match_card_side_valid_visit_counts
 from apps.matchcard.models import MatchCard
 from apps.matchcard.permissions import MATCHCARD_EDITABLE_FIELDS, can_view_match_card, get_allowed_update_fields
-from apps.oplog.models import OperationLog
+from apps.oplog.services import create_operation_log
 from apps.staff.models import Staff
 from apps.user.models import CustomerProfile
 
@@ -103,7 +103,7 @@ def create_match_card(validated_data, actor):
     female_user.last_action_at = now
     female_user.save(update_fields=["is_in_match", "last_action_at", "updated_at"])
 
-    OperationLog.objects.create(
+    create_operation_log(
         operator=actor,
         action="match_card_created",
         target_type="match_card",
@@ -256,7 +256,7 @@ def advance_match_card_stage(match_card, actor, to_stage, reason=""):
     before_json = {"stage": match_card.stage}
     match_card.stage = to_stage
     match_card.save(update_fields=["stage", "updated_at"])
-    OperationLog.objects.create(
+    create_operation_log(
         operator=actor,
         action="match_card_stage_changed",
         target_type="match_card",
@@ -327,7 +327,7 @@ def set_match_card_risk(match_card, actor, risk_level, risk_reason_id=None, risk
     match_card.female_user.last_action_at = now
     match_card.female_user.save(update_fields=["last_action_at", "updated_at"])
 
-    OperationLog.objects.create(
+    create_operation_log(
         operator=actor,
         action="match_card_risk_changed",
         target_type="match_card",
@@ -405,7 +405,7 @@ def end_match_card(match_card, actor, end_reason_male=None, end_reason_female=No
                 "updated_at",
             ]
         )
-        OperationLog.objects.create(
+        create_operation_log(
             operator=actor,
             action="user_status_changed",
             target_type="user",
@@ -426,7 +426,7 @@ def end_match_card(match_card, actor, end_reason_male=None, end_reason_female=No
             }
         )
 
-    OperationLog.objects.create(
+    create_operation_log(
         operator=actor,
         action="match_card_ended",
         target_type="match_card",

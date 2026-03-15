@@ -1562,15 +1562,22 @@ GET /api/v1/operation-logs/
       "target_id": 1,
       "action": "user_status_changed",
       "action_display": "用户状态变更",
-      "field_changed": "pool_status",
-      "old_value": "new_pending",
-      "new_value": "communicated_pending_recommend",
+      "before_json": {
+        "pool_status": "new_pending"
+      },
+      "after_json": {
+        "pool_status": "communicated_pending_recommend"
+      },
       "reason": "首次沟通完成",
       "created_at": "2026-03-14T08:30:00Z"
     }
   ]
 }
 ```
+
+**口径说明：**
+- `before_json / after_json` 是底层 canonical schema
+- 若后续前端需要 `field_changed / old_value / new_value` 形式的单字段展示，可由展示层基于 `before_json / after_json` 派生
 
 ---
 

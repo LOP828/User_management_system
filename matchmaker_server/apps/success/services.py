@@ -7,7 +7,7 @@ from rest_framework.exceptions import PermissionDenied
 from apps.common.exceptions import BusinessRuleError
 from apps.matchcard.models import MatchCard
 from apps.matchcard.permissions import can_view_match_card
-from apps.oplog.models import OperationLog
+from apps.oplog.services import create_operation_log
 from apps.staff.models import Staff
 from apps.success.models import SuccessApplication, SuccessCase
 
@@ -110,7 +110,7 @@ def create_success_application(validated_data, actor):
     match_card.stage = MatchCard.STAGE_SUCCESS_PENDING_REVIEW
     match_card.save(update_fields=["stage", "updated_at"])
 
-    OperationLog.objects.create(
+    create_operation_log(
         operator=actor,
         action="success_applied",
         target_type="match_card",
@@ -155,7 +155,7 @@ def approve_success_application(application, actor):
     match_card.female_user.is_in_match = False
     match_card.female_user.save(update_fields=["is_in_match", "updated_at"])
 
-    OperationLog.objects.create(
+    create_operation_log(
         operator=actor,
         action="success_approved",
         target_type="success_case",
@@ -194,7 +194,7 @@ def reject_success_application(application, actor, review_note):
     match_card.stage = MatchCard.STAGE_STABLE_CONTACT
     match_card.save(update_fields=["stage", "updated_at"])
 
-    OperationLog.objects.create(
+    create_operation_log(
         operator=actor,
         action="success_rejected",
         target_type="match_card",
@@ -265,7 +265,7 @@ def invalidate_success_case(success_case, actor, reason_id, reason_note=None):
     match_card.female_user.is_in_match = False
     match_card.female_user.save(update_fields=["is_in_match", "updated_at"])
 
-    OperationLog.objects.create(
+    create_operation_log(
         operator=actor,
         action="success_invalidated",
         target_type="success_case",

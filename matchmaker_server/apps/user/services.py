@@ -8,7 +8,7 @@ from apps.common.exceptions import BusinessRuleError
 from apps.config_mgmt.models import ReasonEnum
 from apps.followup.models import FollowUpRecord
 from apps.matchcard.models import MatchCard
-from apps.oplog.models import OperationLog
+from apps.oplog.services import create_operation_log
 from apps.staff.models import Staff
 from apps.user.models import CustomerProfile, UserStatusHistory
 
@@ -149,18 +149,6 @@ def create_status_history(user, changed_by, from_status, to_status, reason=None,
     )
 
 
-def create_operation_log(operator, action, target_id, before_json, after_json, reason=None):
-    OperationLog.objects.create(
-        operator=operator,
-        action=action,
-        target_type="user",
-        target_id=target_id,
-        before_json=before_json,
-        after_json=after_json,
-        reason=reason,
-    )
-
-
 def build_user_list_queryset(actor, queryset):
     if actor.role == Staff.ROLE_ADMIN:
         return queryset
@@ -261,6 +249,7 @@ def update_customer_profile(instance, validated_data, actor, force=False, force_
         create_operation_log(
             operator=actor,
             action="admin_force_change",
+            target_type="user",
             target_id=instance.id,
             before_json={"owner_id": old_owner_id},
             after_json={"owner_id": instance.owner_id},
@@ -411,6 +400,7 @@ def change_user_status(user, actor, to_status, reason="", force=False, force_rea
     create_operation_log(
         operator=actor,
         action="admin_force_change" if force else "user_status_changed",
+        target_type="user",
         target_id=user.id,
         before_json=before_json,
         after_json={
@@ -474,6 +464,7 @@ def pause_user(user, actor, reason_id=None, reason_note=None):
     create_operation_log(
         operator=actor,
         action="user_status_changed",
+        target_type="user",
         target_id=user.id,
         before_json=before_json,
         after_json={
@@ -519,6 +510,7 @@ def resume_user(user, actor):
     create_operation_log(
         operator=actor,
         action="user_status_changed",
+        target_type="user",
         target_id=user.id,
         before_json=before_json,
         after_json={

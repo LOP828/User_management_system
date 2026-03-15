@@ -17,4 +17,6 @@ class OperationLog(models.Model):
         db_table = "operation_log"
         indexes = [
             models.Index(fields=["target_type", "target_id", "created_at"], name="oplog_target_idx"),
+            models.Index(fields=["operator", "created_at"], name="oplog_operator_idx"),
+            models.Index(fields=["created_at"], name="oplog_created_idx"),
         ]

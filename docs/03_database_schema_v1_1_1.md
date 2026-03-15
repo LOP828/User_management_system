@@ -416,9 +416,8 @@ staff（红娘/管理员）
 | target_type | VARCHAR(30) | 是 | — | 操作对象类型：user / match_card / success_case / transfer 等 |
 | target_id | BIGINT | 是 | — | 对象 ID |
 | action | VARCHAR(50) | 是 | — | 操作类型（见枚举 4.12.1） |
-| field_changed | VARCHAR(100) | 否 | NULL | 变更字段名 |
-| old_value | TEXT | 否 | NULL | 改前值 |
-| new_value | TEXT | 否 | NULL | 改后值 |
+| before_json | JSON | 否 | NULL | 结构化变更前快照 |
+| after_json | JSON | 否 | NULL | 结构化变更后快照 |
 | reason | VARCHAR(500) | 否 | NULL | 变更原因 |
 | created_at | TIMESTAMP | 是 | CURRENT_TIMESTAMP | 操作时间 |
 
@@ -453,6 +452,10 @@ staff（红娘/管理员）
 - INDEX(target_type, target_id, created_at) — 查某对象的操作历史
 - INDEX(operator_id, created_at) — 查某操作人的日志
 - INDEX(created_at) — 按时间范围查日志
+
+**展示层说明：**
+- `field_changed / old_value / new_value` 不再作为底层 schema 字段
+- 若后续需要单字段变更展示，可由 `before_json / after_json` 在应用层或展示层派生
 
 **特殊约束：**
 - 此表不允许 UPDATE 和 DELETE 操作
