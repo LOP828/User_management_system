@@ -25,6 +25,10 @@ ACTIVE_REMINDER_STATUSES = {
     Reminder.STATUS_PENDING,
     Reminder.STATUS_SENT,
 }
+MATCH_CARD_REVISIT_REMIND_TYPES = {
+    Reminder.TYPE_MATCHED_REVISIT,
+    Reminder.TYPE_MANUAL,
+}
 MATCH_CARD_REFRESH_REMIND_TYPES = {
     Reminder.TYPE_MATCHED_REVISIT,
     Reminder.TYPE_SUCCESS_REVISIT,
@@ -197,6 +201,28 @@ def refresh_match_card_next_remind_at(match_card):
     match_card.next_remind_at = next_remind_at
     match_card.save(update_fields=["next_remind_at", "updated_at"])
     return next_remind_at
+
+
+def sync_match_card_revisit_reminders(match_card):
+    Reminder.objects.filter(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=match_card.id,
+        remind_type__in=MATCH_CARD_REVISIT_REMIND_TYPES,
+        status__in=ACTIVE_REMINDER_STATUSES,
+    ).update(status=Reminder.STATUS_EXPIRED)
+
+    for item in build_match_card_reminders(match_card):
+        Reminder.objects.create(
+            target_type=Reminder.TARGET_MATCH_CARD,
+            target_id=match_card.id,
+            staff_id=item["staff_id"],
+            remind_type=Reminder.TYPE_MANUAL if item["is_manual"] else Reminder.TYPE_MATCHED_REVISIT,
+            remind_at=item["remind_at"],
+            status=Reminder.STATUS_PENDING,
+            is_manual=item["is_manual"],
+        )
+
+    return refresh_match_card_next_remind_at(match_card)
 
 
 def _parse_datetime_query(value, field_name):

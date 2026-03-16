@@ -6,6 +6,7 @@ from django.utils import timezone
 
 from apps.followup.models import FollowUpRecord
 from apps.matchcard.models import MatchCard
+from apps.reminder.models import Reminder
 from apps.success.models import SuccessApplication, SuccessCase
 from apps.user.models import CustomerProfile
 
@@ -158,6 +159,22 @@ def test_create_followup_updates_match_card_last_visit_and_returns_valid_visit(a
     assert card.last_visit_at is not None
     assert card.male_user.last_action_at is not None
     assert card.next_remind_at == follow_up_time("2026-03-20T09:00:00Z")
+    reminders = list(
+        Reminder.objects.filter(
+            target_type=Reminder.TARGET_MATCH_CARD,
+            target_id=card.id,
+            status=Reminder.STATUS_PENDING,
+        ).order_by("staff_id", "remind_at", "id")
+    )
+    assert len(reminders) == 2
+    male_reminder = next(reminder for reminder in reminders if reminder.staff_id == male_staff.id)
+    female_reminder = next(reminder for reminder in reminders if reminder.staff_id != male_staff.id)
+    assert male_reminder.remind_type == Reminder.TYPE_MANUAL
+    assert male_reminder.is_manual is True
+    assert male_reminder.remind_at == follow_up_time("2026-03-20T09:00:00Z")
+    assert female_reminder.remind_type == Reminder.TYPE_MATCHED_REVISIT
+    assert female_reminder.is_manual is False
+    assert female_reminder.remind_at == card.created_at + timedelta(days=14)
 
 
 def follow_up_time(value):
@@ -188,6 +205,17 @@ def test_create_followup_default_mode_updates_match_card_next_remind_at(auth_cli
     assert response.status_code == 201
     card.refresh_from_db()
     assert card.next_remind_at == card.created_at + timedelta(days=14)
+    reminders = list(
+        Reminder.objects.filter(
+            target_type=Reminder.TARGET_MATCH_CARD,
+            target_id=card.id,
+            status=Reminder.STATUS_PENDING,
+            remind_type=Reminder.TYPE_MATCHED_REVISIT,
+        ).order_by("staff_id", "id")
+    )
+    assert len(reminders) == 2
+    assert {reminder.staff_id for reminder in reminders} == {male_staff.id, card.female_staff_id}
+    assert all(reminder.remind_at == card.created_at + timedelta(days=14) for reminder in reminders)
 
 
 def test_create_followup_requires_matched_fields(auth_client, create_match_card, create_staff):
@@ -625,6 +653,21 @@ def test_side_staff_can_patch_followup(auth_client, create_follow_up, create_mat
     assert follow_up.content == "男方确认愿意继续推进"
     assert follow_up.next_remind_mode == FollowUpRecord.REMIND_MANUAL
     assert card.next_remind_at == follow_up_time("2026-03-22T09:00:00Z")
+    reminders = list(
+        Reminder.objects.filter(
+            target_type=Reminder.TARGET_MATCH_CARD,
+            target_id=card.id,
+            status=Reminder.STATUS_PENDING,
+        ).order_by("staff_id", "remind_at", "id")
+    )
+    assert len(reminders) == 2
+    male_reminder = next(reminder for reminder in reminders if reminder.staff_id == male_staff.id)
+    female_reminder = next(reminder for reminder in reminders if reminder.staff_id == card.female_staff_id)
+    assert male_reminder.remind_type == Reminder.TYPE_MANUAL
+    assert male_reminder.is_manual is True
+    assert male_reminder.remind_at == follow_up_time("2026-03-22T09:00:00Z")
+    assert female_reminder.remind_type == Reminder.TYPE_MATCHED_REVISIT
+    assert female_reminder.is_manual is False
 
 
 def test_owner_can_patch_unmatched_followup(auth_client, create_customer_profile, create_follow_up, create_staff):

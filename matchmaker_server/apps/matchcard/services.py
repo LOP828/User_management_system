@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
@@ -12,7 +13,7 @@ from apps.matchcard.models import MatchCard
 from apps.matchcard.permissions import MATCHCARD_EDITABLE_FIELDS, can_view_match_card, get_allowed_update_fields
 from apps.oplog.services import create_operation_log
 from apps.reminder.models import Reminder
-from apps.reminder.services import expire_target_reminders
+from apps.reminder.services import expire_target_reminders, sync_match_card_revisit_reminders
 from apps.staff.models import Staff
 from apps.user.models import CustomerProfile
 
@@ -58,6 +59,7 @@ def require_matchcard_primary_permission(actor, match_card):
         raise PermissionDenied("无权限")
 
 
+@transaction.atomic
 def create_match_card(validated_data, actor):
     male_user = validated_data["male_user"]
     female_user = validated_data["female_user"]
@@ -119,6 +121,7 @@ def create_match_card(validated_data, actor):
         },
         reason=None,
     )
+    sync_match_card_revisit_reminders(match_card)
 
     return match_card
 

@@ -4,6 +4,7 @@ from django.utils import timezone
 
 from apps.followup.models import FollowUpRecord
 from apps.user.models import CustomerProfile
+from apps.reminder.models import Reminder
 
 
 pytestmark = pytest.mark.django_db
@@ -94,6 +95,20 @@ def test_create_match_card_sets_users_in_match_and_staff_fields(auth_client, mat
     female_user.refresh_from_db()
     assert male_user.is_in_match is True
     assert female_user.is_in_match is True
+    reminders = list(
+        Reminder.objects.filter(
+            target_type=Reminder.TARGET_MATCH_CARD,
+            target_id=response.data["id"],
+            status=Reminder.STATUS_PENDING,
+        ).order_by("staff_id", "id")
+    )
+    assert len(reminders) == 2
+    assert [reminder.remind_type for reminder in reminders] == [
+        Reminder.TYPE_MATCHED_REVISIT,
+        Reminder.TYPE_MATCHED_REVISIT,
+    ]
+    assert {reminder.staff_id for reminder in reminders} == {matchmaker_staff.id, female_staff.id}
+    assert all(reminder.is_manual is False for reminder in reminders)
 
 
 def test_create_match_card_blocks_when_any_user_already_in_match(auth_client, matchmaker_staff, create_customer_profile, create_staff):

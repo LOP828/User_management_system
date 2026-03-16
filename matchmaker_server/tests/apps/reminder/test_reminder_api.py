@@ -94,6 +94,56 @@ def test_matchmaker_only_sees_own_persisted_reminders(auth_client, create_custom
     assert item["remind_type"] == Reminder.TYPE_FOLLOWUP_TIMEOUT
 
 
+def test_matched_revisit_created_via_match_card_api_appears_in_persisted_list(
+    auth_client,
+    create_customer_profile,
+    create_staff,
+):
+    male_staff = create_staff(name="配对提醒男方A")
+    female_staff = create_staff(name="配对提醒女方A")
+    male_user = create_customer_profile(
+        owner=male_staff,
+        name="配对男方A",
+        gender=CustomerProfile.GENDER_MALE,
+        phone="13902001101",
+        wechat="matched_reminder_male_a",
+        pool_status=CustomerProfile.STATUS_SELECTED_PENDING_MEET,
+    )
+    female_user = create_customer_profile(
+        owner=female_staff,
+        name="配对女方A",
+        gender=CustomerProfile.GENDER_FEMALE,
+        phone="13902001102",
+        wechat="matched_reminder_female_a",
+        pool_status=CustomerProfile.STATUS_SELECTED_PENDING_MEET,
+    )
+
+    create_response = auth_client(male_staff).post(
+        "/api/v1/match-cards/",
+        {
+            "male_user_id": male_user.id,
+            "female_user_id": female_user.id,
+            "candidate_id": 1,
+        },
+        format="json",
+    )
+    assert create_response.status_code == 201
+
+    male_response = auth_client(male_staff).get("/api/v1/reminders/?remind_type=matched_revisit")
+    female_response = auth_client(female_staff).get("/api/v1/reminders/?remind_type=matched_revisit")
+
+    assert male_response.status_code == 200
+    assert male_response.data["count"] == 1
+    assert male_response.data["results"][0]["target_type"] == Reminder.TARGET_MATCH_CARD
+    assert male_response.data["results"][0]["target_id"] == create_response.data["id"]
+    assert male_response.data["results"][0]["staff_id"] == male_staff.id
+    assert male_response.data["results"][0]["remind_type"] == Reminder.TYPE_MATCHED_REVISIT
+    assert female_response.status_code == 200
+    assert female_response.data["count"] == 1
+    assert female_response.data["results"][0]["staff_id"] == female_staff.id
+    assert female_response.data["results"][0]["remind_type"] == Reminder.TYPE_MATCHED_REVISIT
+
+
 def test_admin_can_view_all_and_filter_by_staff_id(auth_client, admin_staff, create_customer_profile, create_staff):
     owner_a = create_staff(name="提醒红娘C")
     owner_b = create_staff(name="提醒红娘D")

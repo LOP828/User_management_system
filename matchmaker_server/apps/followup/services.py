@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
@@ -6,7 +7,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from apps.common.exceptions import BusinessRuleError
 from apps.followup.models import FollowUpRecord
 from apps.matchcard.models import MatchCard
-from apps.reminder.services import refresh_match_card_next_remind_at
+from apps.reminder.services import sync_match_card_revisit_reminders
 from apps.staff.models import Staff
 
 
@@ -282,6 +283,7 @@ def _touch_match_card_users(match_card):
     match_card.female_user.save(update_fields=["last_action_at", "updated_at"])
 
 
+@transaction.atomic
 def create_follow_up(validated_data, actor):
     require_supported_scene(validated_data["scene"])
     validate_followup_scene_payload(validated_data)
@@ -308,10 +310,11 @@ def create_follow_up(validated_data, actor):
         _touch_match_card_users(match_card)
     if scene == FollowUpRecord.SCENE_MATCHED and is_valid_follow_up_record(follow_up):
         _refresh_match_card_last_visit_at(match_card)
-        refresh_match_card_next_remind_at(match_card)
+        sync_match_card_revisit_reminders(match_card)
     return follow_up
 
 
+@transaction.atomic
 def update_follow_up(instance, validated_data, actor):
     require_followup_view_permission(actor, instance)
     if instance.scene == FollowUpRecord.SCENE_UNMATCHED:
@@ -341,7 +344,7 @@ def update_follow_up(instance, validated_data, actor):
         _touch_match_card_users(instance.match_card)
     if instance.scene == FollowUpRecord.SCENE_MATCHED and is_valid_follow_up_record(instance):
         _refresh_match_card_last_visit_at(instance.match_card)
-        refresh_match_card_next_remind_at(instance.match_card)
+        sync_match_card_revisit_reminders(instance.match_card)
     return instance
 
 
