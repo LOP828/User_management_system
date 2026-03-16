@@ -10,6 +10,7 @@ from apps.common.exceptions import BusinessRuleError
 from apps.config_mgmt.models import ReasonEnum
 from apps.followup.models import FollowUpRecord
 from apps.matchcard.models import MatchCard
+from apps.matchcard.permissions import can_view_match_card
 from apps.reminder.models import Reminder
 from apps.staff.models import Staff
 from apps.user.models import CustomerProfile
@@ -31,17 +32,37 @@ MATCH_CARD_REFRESH_REMIND_TYPES = {
 }
 REMIND_TYPE_MATCHED_REVISIT = "matched_revisit"
 REMIND_TYPE_DISPLAY_MAP = {
+    Reminder.TYPE_NORMAL: "普通提醒",
+    Reminder.TYPE_FIRST_MEET_PENDING: "未首见待推进",
+    Reminder.TYPE_FIRST_MEET_DELAYED: "首见已延迟",
+    Reminder.TYPE_FIRST_MEET_WARNING: "未首见预警",
+    Reminder.TYPE_FIRST_MEET_OVERDUE: "未首见超时",
+    Reminder.TYPE_FOLLOWUP_TIMEOUT: "跟进超时",
+    Reminder.TYPE_PAUSE_REVISIT: "暂停回访",
     REMIND_TYPE_MATCHED_REVISIT: "已配对回访提醒",
+    Reminder.TYPE_SUCCESS_REVISIT: "成功后回访提醒",
+    Reminder.TYPE_URGENT: "紧急提醒",
+    Reminder.TYPE_MANUAL: "手动提醒",
 }
 STAGE_DISPLAY_MAP = {
     MatchCard.STAGE_INITIAL_CONTACT: "初期接触",
     MatchCard.STAGE_STABLE_CONTACT: "稳定联系",
     MatchCard.STAGE_SUCCESS_PENDING_REVIEW: "成功待审核",
+    MatchCard.STAGE_SUCCESS: "成功",
+    MatchCard.STAGE_ENDED: "结束",
 }
 RISK_DISPLAY_MAP = {
     MatchCard.RISK_NONE: "无风险",
     MatchCard.RISK_WATCHING: "关注中",
     MatchCard.RISK_HIGH_RISK: "高风险",
+}
+POOL_STATUS_DISPLAY_MAP = {
+    CustomerProfile.STATUS_NEW_PENDING: "新分配待沟通",
+    CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND: "已沟通待推荐",
+    CustomerProfile.STATUS_RECOMMENDED_PENDING_SELECT: "已推荐待选择",
+    CustomerProfile.STATUS_SELECTED_PENDING_MEET: "已选择待见面",
+    CustomerProfile.STATUS_MET_NOT_CONTINUE: "见面未继续",
+    CustomerProfile.STATUS_PAUSED: "暂停中",
 }
 
 
@@ -228,7 +249,7 @@ def build_persisted_reminder_queryset(actor, query_params):
 
 def _get_user_target(target_id):
     try:
-        return CustomerProfile.objects.get(id=target_id, deleted_at__isnull=True)
+        return CustomerProfile.objects.select_related("payment_level", "owner").get(id=target_id, deleted_at__isnull=True)
     except CustomerProfile.DoesNotExist as exc:
         raise BusinessRuleError(
             "REMINDER_TARGET_NOT_FOUND",
@@ -239,7 +260,13 @@ def _get_user_target(target_id):
 
 def _get_match_card_target(target_id):
     try:
-        return MatchCard.objects.get(id=target_id)
+        return MatchCard.objects.select_related(
+            "male_user",
+            "female_user",
+            "male_staff",
+            "female_staff",
+            "primary_staff",
+        ).get(id=target_id)
     except MatchCard.DoesNotExist as exc:
         raise BusinessRuleError(
             "REMINDER_TARGET_NOT_FOUND",
@@ -286,6 +313,102 @@ def create_reminder(*, target_type, target_id, staff, remind_type, remind_at, st
     if target_type == Reminder.TARGET_MATCH_CARD:
         refresh_match_card_next_remind_at(target)
     return reminder
+
+
+def _build_timing_summary(remind_at):
+    if remind_at <= timezone.now():
+        overdue_days = max((timezone.now() - remind_at).days, 0)
+        return f"已逾期{overdue_days}天"
+    return f"应处理时间 {timezone.localtime(remind_at).strftime('%Y-%m-%d %H:%M')}"
+
+
+def build_reminder_display(reminder):
+    target = get_reminder_target(reminder)
+    remind_type_display = REMIND_TYPE_DISPLAY_MAP.get(reminder.remind_type, reminder.remind_type)
+    timing_summary = _build_timing_summary(reminder.remind_at)
+
+    if reminder.target_type == Reminder.TARGET_USER:
+        payment_name = target.payment_level.name if target.payment_level_id else "-"
+        return {
+            "target_name": target.name,
+            "target_summary": f"{POOL_STATUS_DISPLAY_MAP.get(target.pool_status, target.pool_status)} | {payment_name} | {timing_summary}",
+            "remind_type_display": remind_type_display,
+        }
+
+    return {
+        "target_name": f"{target.male_user.name} × {target.female_user.name}",
+        "target_summary": (
+            f"{remind_type_display} | "
+            f"{STAGE_DISPLAY_MAP.get(target.stage, target.stage)} | "
+            f"{RISK_DISPLAY_MAP.get(target.risk_level, target.risk_level)} | "
+            f"{timing_summary}"
+        ),
+        "remind_type_display": remind_type_display,
+    }
+
+
+def _require_manual_user_reminder_permission(actor, user):
+    if actor.role == Staff.ROLE_ADMIN:
+        return
+    if actor.id == user.owner_id:
+        return
+    raise PermissionDenied("无权限")
+
+
+def _resolve_manual_match_card_staff(actor, match_card):
+    if actor.role == Staff.ROLE_ADMIN:
+        return match_card.primary_staff
+    if can_view_match_card(actor, match_card):
+        return actor
+    raise PermissionDenied("无权限")
+
+
+def _expire_manual_override_candidates(target_type, target_id, staff_id):
+    queryset = Reminder.objects.filter(
+        target_type=target_type,
+        target_id=target_id,
+        staff_id=staff_id,
+        status=Reminder.STATUS_PENDING,
+        is_manual=False,
+    )
+    updated = queryset.update(status=Reminder.STATUS_EXPIRED)
+    if target_type == Reminder.TARGET_MATCH_CARD:
+        refresh_match_card_next_remind_at(_get_match_card_target(target_id))
+    return updated
+
+
+@transaction.atomic
+def create_manual_reminder(validated_data, actor):
+    target_type = validated_data["target_type"]
+    target_id = validated_data["target_id"]
+    remind_at = validated_data["remind_at"]
+    target = _get_target_for_create(target_type, target_id)
+
+    if target_type == Reminder.TARGET_USER:
+        _require_manual_user_reminder_permission(actor, target)
+        receiver = target.owner
+    else:
+        receiver = _resolve_manual_match_card_staff(actor, target)
+
+    _expire_manual_override_candidates(target_type, target_id, receiver.id)
+    reminder = create_reminder(
+        target_type=target_type,
+        target_id=target_id,
+        staff=receiver,
+        remind_type=Reminder.TYPE_MANUAL,
+        remind_at=remind_at,
+        is_manual=True,
+    )
+    return {
+        "id": reminder.id,
+        "target_type": reminder.target_type,
+        "target_id": reminder.target_id,
+        "remind_type": reminder.remind_type,
+        "remind_at": reminder.remind_at,
+        "status": reminder.status,
+        "is_manual": reminder.is_manual,
+        "message": "手动提醒已设置，原有系统提醒已覆盖",
+    }
 
 
 def require_reminder_process_permission(actor, reminder):

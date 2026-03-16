@@ -1,9 +1,13 @@
+from datetime import timedelta
+
 import pytest
 from django.utils import timezone
 from rest_framework import status
 
 from apps.matchcard.models import MatchCard
 from apps.oplog.models import OperationLog
+from apps.reminder.models import Reminder
+from apps.reminder.services import create_reminder
 from apps.user.models import CustomerProfile, UserStatusHistory
 
 
@@ -453,9 +457,30 @@ def test_admin_can_change_owner_id_with_force(
         primary_staff=primary_staff,
         stage=MatchCard.STAGE_ENDED,
     )
+    active_reminder = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=active_card.id,
+        staff=old_owner,
+        remind_type=Reminder.TYPE_MATCHED_REVISIT,
+        remind_at=timezone.now() + timedelta(days=7),
+    )
+    pending_review_reminder = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=pending_review_card.id,
+        staff=old_owner,
+        remind_type=Reminder.TYPE_MATCHED_REVISIT,
+        remind_at=timezone.now() + timedelta(days=9),
+    )
+    ended_reminder = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=ended_card.id,
+        staff=old_owner,
+        remind_type=Reminder.TYPE_MATCHED_REVISIT,
+        remind_at=timezone.now() + timedelta(days=11),
+    )
 
     before_change = timezone.now()
-    assert auth_client(old_owner).get("/api/v1/reminders/").data["count"] == 2
+    assert auth_client(old_owner).get("/api/v1/reminders/").data["count"] == 3
 
     response = auth_client(admin_staff).patch(
         f"/api/v1/users/{user.id}/",
@@ -472,6 +497,9 @@ def test_admin_can_change_owner_id_with_force(
     active_card.refresh_from_db()
     pending_review_card.refresh_from_db()
     ended_card.refresh_from_db()
+    active_reminder.refresh_from_db()
+    pending_review_reminder.refresh_from_db()
+    ended_reminder.refresh_from_db()
     assert user.owner_id == new_owner.id
     assert user.last_action_at is not None
     assert user.last_action_at >= before_change
@@ -480,7 +508,12 @@ def test_admin_can_change_owner_id_with_force(
     assert ended_card.male_staff_id == old_owner.id
     assert active_card.female_staff_id == female_owner.id
     assert active_card.primary_staff_id == primary_staff.id
-    assert auth_client(old_owner).get("/api/v1/reminders/").data["count"] == 0
+    assert active_reminder.staff_id == new_owner.id
+    assert pending_review_reminder.staff_id == new_owner.id
+    assert ended_reminder.staff_id == old_owner.id
+    old_owner_reminders = auth_client(old_owner).get("/api/v1/reminders/")
+    assert old_owner_reminders.data["count"] == 1
+    assert old_owner_reminders.data["results"][0]["id"] == ended_reminder.id
     new_owner_reminders = auth_client(new_owner).get("/api/v1/reminders/")
     assert new_owner_reminders.data["count"] == 2
     assert all(item["staff_id"] == new_owner.id for item in new_owner_reminders.data["results"])

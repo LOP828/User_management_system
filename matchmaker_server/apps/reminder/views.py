@@ -1,4 +1,5 @@
 from django.shortcuts import get_object_or_404
+from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -8,10 +9,12 @@ from apps.config_mgmt.models import ReasonEnum
 from apps.reminder.models import Reminder
 from apps.reminder.serializers import (
     ReminderListItemSerializer,
+    ReminderManualCreateRequestSerializer,
+    ReminderManualCreateResponseSerializer,
     ReminderProcessRequestSerializer,
     ReminderProcessResponseSerializer,
 )
-from apps.reminder.services import build_reminder_list, process_reminder
+from apps.reminder.services import build_persisted_reminder_queryset, create_manual_reminder, process_reminder
 
 
 class ReminderListView(APIView):
@@ -19,7 +22,7 @@ class ReminderListView(APIView):
     pagination_class = DefaultPageNumberPagination
 
     def get(self, request):
-        reminders = build_reminder_list(request.user, request.query_params)
+        reminders = build_persisted_reminder_queryset(request.user, request.query_params)
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(reminders, request, view=self)
         serializer = ReminderListItemSerializer(page, many=True)
@@ -47,3 +50,14 @@ class ReminderProcessView(APIView):
         )
         response_serializer = ReminderProcessResponseSerializer(result)
         return Response(response_serializer.data)
+
+
+class ReminderManualCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = ReminderManualCreateRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        result = create_manual_reminder(serializer.validated_data, request.user)
+        response_serializer = ReminderManualCreateResponseSerializer(result)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)

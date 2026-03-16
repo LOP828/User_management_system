@@ -9,6 +9,7 @@ from apps.config_mgmt.models import ReasonEnum
 from apps.followup.models import FollowUpRecord
 from apps.matchcard.models import MatchCard
 from apps.oplog.services import create_operation_log
+from apps.reminder.models import Reminder
 from apps.staff.models import Staff
 from apps.user.models import CustomerProfile, UserStatusHistory
 
@@ -54,6 +55,10 @@ OWNER_SYNC_MATCHCARD_STAGES = {
     MatchCard.STAGE_INITIAL_CONTACT,
     MatchCard.STAGE_STABLE_CONTACT,
     MatchCard.STAGE_SUCCESS_PENDING_REVIEW,
+}
+OWNER_SYNC_MATCHCARD_REMIND_TYPES = {
+    Reminder.TYPE_MATCHED_REVISIT,
+    Reminder.TYPE_MANUAL,
 }
 
 
@@ -180,6 +185,31 @@ def sync_owner_related_active_match_cards(user, new_owner):
             match_card.save(update_fields=[*update_fields, "updated_at"])
 
 
+def sync_owner_related_pending_reminders(user, old_owner_id, new_owner):
+    Reminder.objects.filter(
+        target_type=Reminder.TARGET_USER,
+        target_id=user.id,
+        staff_id=old_owner_id,
+        status=Reminder.STATUS_PENDING,
+    ).update(staff=new_owner)
+
+    active_match_card_ids = list(
+        MatchCard.objects.filter(stage__in=OWNER_SYNC_MATCHCARD_STAGES)
+        .filter(Q(male_user_id=user.id) | Q(female_user_id=user.id))
+        .values_list("id", flat=True)
+    )
+    if not active_match_card_ids:
+        return
+
+    Reminder.objects.filter(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id__in=active_match_card_ids,
+        staff_id=old_owner_id,
+        status=Reminder.STATUS_PENDING,
+        remind_type__in=OWNER_SYNC_MATCHCARD_REMIND_TYPES,
+    ).update(staff=new_owner)
+
+
 def create_customer_profile(validated_data, actor):
     payload = build_customer_payload(validated_data)
     validate_minimum_contact(payload)
@@ -246,6 +276,7 @@ def update_customer_profile(instance, validated_data, actor, force=False, force_
 
     if owner_changed:
         sync_owner_related_active_match_cards(instance, instance.owner)
+        sync_owner_related_pending_reminders(instance, old_owner_id, instance.owner)
         create_operation_log(
             operator=actor,
             action="admin_force_change",

@@ -61,94 +61,211 @@ def create_match_card(create_customer_profile, create_staff):
     return factory
 
 
-def test_matchmaker_only_sees_own_derived_reminders(auth_client, create_match_card, create_staff):
-    male_staff = create_staff(name="男方红娘A")
-    female_staff = create_staff(name="女方红娘A")
-    card = create_match_card(male_staff=male_staff, female_staff=female_staff, primary_staff=male_staff)
+def test_matchmaker_only_sees_own_persisted_reminders(auth_client, create_customer_profile, create_staff):
+    owner_a = create_staff(name="提醒红娘A")
+    owner_b = create_staff(name="提醒红娘B")
+    user_a = create_customer_profile(owner=owner_a, phone="13902001001", wechat="persisted_list_a")
+    user_b = create_customer_profile(owner=owner_b, phone="13902001002", wechat="persisted_list_b")
+    own_reminder = create_reminder(
+        target_type=Reminder.TARGET_USER,
+        target_id=user_a.id,
+        staff=owner_a,
+        remind_type=Reminder.TYPE_FOLLOWUP_TIMEOUT,
+        remind_at=timezone.now() + timedelta(hours=2),
+    )
+    create_reminder(
+        target_type=Reminder.TARGET_USER,
+        target_id=user_b.id,
+        staff=owner_b,
+        remind_type=Reminder.TYPE_NORMAL,
+        remind_at=timezone.now() + timedelta(hours=3),
+    )
 
-    response = auth_client(male_staff).get("/api/v1/reminders/")
+    response = auth_client(owner_a).get("/api/v1/reminders/")
 
     assert response.status_code == 200
     assert response.data["count"] == 1
     item = response.data["results"][0]
-    assert item["target_type"] == "match_card"
-    assert item["target_id"] == card.id
-    assert item["staff_id"] == male_staff.id
-    assert item["remind_type"] == "matched_revisit"
+    assert item["id"] == own_reminder.id
+    assert item["target_type"] == Reminder.TARGET_USER
+    assert item["target_id"] == user_a.id
+    assert item["target_name"] == user_a.name
+    assert item["staff_id"] == owner_a.id
+    assert item["remind_type"] == Reminder.TYPE_FOLLOWUP_TIMEOUT
 
 
-def test_admin_can_view_all_and_filter_by_staff_id(auth_client, admin_staff, create_match_card, create_staff):
-    male_staff = create_staff(name="男方红娘B")
-    female_staff = create_staff(name="女方红娘B")
-    create_match_card(male_staff=male_staff, female_staff=female_staff, primary_staff=male_staff)
+def test_admin_can_view_all_and_filter_by_staff_id(auth_client, admin_staff, create_customer_profile, create_staff):
+    owner_a = create_staff(name="提醒红娘C")
+    owner_b = create_staff(name="提醒红娘D")
+    user_a = create_customer_profile(owner=owner_a, phone="13902001003", wechat="persisted_admin_a")
+    user_b = create_customer_profile(owner=owner_b, phone="13902001004", wechat="persisted_admin_b")
+    create_reminder(
+        target_type=Reminder.TARGET_USER,
+        target_id=user_a.id,
+        staff=owner_a,
+        remind_type=Reminder.TYPE_NORMAL,
+        remind_at=timezone.now() + timedelta(hours=2),
+    )
+    reminder_b = create_reminder(
+        target_type=Reminder.TARGET_USER,
+        target_id=user_b.id,
+        staff=owner_b,
+        remind_type=Reminder.TYPE_MANUAL,
+        remind_at=timezone.now() + timedelta(hours=4),
+        is_manual=True,
+    )
 
     all_response = auth_client(admin_staff).get("/api/v1/reminders/")
-    filtered_response = auth_client(admin_staff).get(f"/api/v1/reminders/?staff_id={female_staff.id}")
+    filtered_response = auth_client(admin_staff).get(f"/api/v1/reminders/?staff_id={owner_b.id}")
 
     assert all_response.status_code == 200
     assert all_response.data["count"] == 2
     assert filtered_response.status_code == 200
     assert filtered_response.data["count"] == 1
-    assert filtered_response.data["results"][0]["staff_id"] == female_staff.id
+    assert filtered_response.data["results"][0]["id"] == reminder_b.id
+    assert filtered_response.data["results"][0]["staff_id"] == owner_b.id
 
 
-def test_reminder_list_marks_overdue_in_target_summary(auth_client, create_match_card, create_staff):
-    male_staff = create_staff(name="男方红娘C")
-    female_staff = create_staff(name="女方红娘C")
-    card = create_match_card(male_staff=male_staff, female_staff=female_staff, primary_staff=male_staff)
-    old_created_at = timezone.now() - timedelta(days=10)
-    MatchCard.objects.filter(pk=card.pk).update(created_at=old_created_at, next_remind_at=old_created_at + timedelta(days=7))
+def test_status_and_target_type_filters_apply_to_persisted_reminders(auth_client, create_customer_profile, create_staff):
+    owner = create_staff(name="提醒红娘E")
+    user = create_customer_profile(owner=owner, phone="13902001005", wechat="persisted_filter_user")
+    create_reminder(
+        target_type=Reminder.TARGET_USER,
+        target_id=user.id,
+        staff=owner,
+        remind_type=Reminder.TYPE_NORMAL,
+        remind_at=timezone.now() + timedelta(hours=2),
+        status_value=Reminder.STATUS_PENDING,
+    )
+    create_reminder(
+        target_type=Reminder.TARGET_USER,
+        target_id=user.id,
+        staff=owner,
+        remind_type=Reminder.TYPE_FOLLOWUP_TIMEOUT,
+        remind_at=timezone.now() + timedelta(hours=3),
+        status_value=Reminder.STATUS_PROCESSED,
+    )
+    create_reminder(
+        target_type=Reminder.TARGET_USER,
+        target_id=user.id,
+        staff=owner,
+        remind_type=Reminder.TYPE_MANUAL,
+        remind_at=timezone.now() + timedelta(hours=4),
+        status_value=Reminder.STATUS_EXPIRED,
+        is_manual=True,
+    )
 
-    response = auth_client(male_staff).get("/api/v1/reminders/")
+    pending_response = auth_client(owner).get("/api/v1/reminders/?status=pending&target_type=user")
+    processed_response = auth_client(owner).get("/api/v1/reminders/?status=processed")
+    expired_response = auth_client(owner).get("/api/v1/reminders/?status=expired")
+
+    assert pending_response.status_code == 200
+    assert pending_response.data["count"] == 1
+    assert pending_response.data["results"][0]["status"] == Reminder.STATUS_PENDING
+    assert processed_response.status_code == 200
+    assert processed_response.data["count"] == 1
+    assert processed_response.data["results"][0]["status"] == Reminder.STATUS_PROCESSED
+    assert expired_response.status_code == 200
+    assert expired_response.data["count"] == 1
+    assert expired_response.data["results"][0]["status"] == Reminder.STATUS_EXPIRED
+
+
+def test_success_revisit_appears_in_persisted_list(auth_client, create_match_card, create_staff):
+    primary_staff = create_staff(name="主操作红娘F")
+    card = create_match_card(primary_staff=primary_staff, male_staff=primary_staff, stage=MatchCard.STAGE_SUCCESS)
+    reminder = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff=primary_staff,
+        remind_type=Reminder.TYPE_SUCCESS_REVISIT,
+        remind_at=timezone.now() + timedelta(days=30),
+    )
+
+    response = auth_client(primary_staff).get("/api/v1/reminders/?remind_type=success_revisit")
 
     assert response.status_code == 200
     assert response.data["count"] == 1
-    assert "已逾期" in response.data["results"][0]["target_summary"]
+    item = response.data["results"][0]
+    assert item["id"] == reminder.id
+    assert item["target_type"] == Reminder.TARGET_MATCH_CARD
+    assert item["target_id"] == card.id
+    assert item["remind_type"] == Reminder.TYPE_SUCCESS_REVISIT
+    assert item["staff_id"] == primary_staff.id
 
 
-def test_manual_followup_changes_derived_reminder(auth_client, create_match_card, create_staff):
-    male_staff = create_staff(name="男方红娘D")
-    female_staff = create_staff(name="女方红娘D")
-    card = create_match_card(male_staff=male_staff, female_staff=female_staff, primary_staff=male_staff)
+def test_manual_reminder_create_expires_same_staff_pending_system_reminders_and_refreshes_next_remind_at(
+    auth_client,
+    create_match_card,
+    create_staff,
+):
+    primary_staff = create_staff(name="主操作红娘G")
+    female_staff = create_staff(name="女方红娘G")
+    card = create_match_card(
+        primary_staff=primary_staff,
+        male_staff=primary_staff,
+        female_staff=female_staff,
+        stage=MatchCard.STAGE_STABLE_CONTACT,
+    )
+    own_system_reminder = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff=primary_staff,
+        remind_type=Reminder.TYPE_MATCHED_REVISIT,
+        remind_at=timezone.now() + timedelta(days=7),
+    )
+    other_staff_reminder = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff=female_staff,
+        remind_type=Reminder.TYPE_MATCHED_REVISIT,
+        remind_at=timezone.now() + timedelta(days=9),
+    )
 
-    followup_response = auth_client(male_staff).post(
-        "/api/v1/follow-ups/",
+    response = auth_client(primary_staff).post(
+        "/api/v1/reminders/manual/",
         {
-            "scene": "matched",
-            "match_card_id": card.id,
-            "user_id": card.male_user_id,
-            "content": "男方手动约下次回访",
-            "is_still_contact": "yes",
-            "risk_status": "none",
-            "next_remind_mode": "manual",
-            "next_remind_at": "2026-03-18T09:00:00Z",
+            "target_type": Reminder.TARGET_MATCH_CARD,
+            "target_id": card.id,
+            "remind_at": "2026-03-18T09:00:00Z",
         },
         format="json",
     )
 
-    assert followup_response.status_code == 201
+    assert response.status_code == 201
+    assert response.data["target_type"] == Reminder.TARGET_MATCH_CARD
+    assert response.data["target_id"] == card.id
+    assert response.data["remind_type"] == Reminder.TYPE_MANUAL
+    assert response.data["status"] == Reminder.STATUS_PENDING
+    assert response.data["is_manual"] is True
 
-    reminder_response = auth_client(male_staff).get("/api/v1/reminders/")
+    own_system_reminder.refresh_from_db()
+    other_staff_reminder.refresh_from_db()
+    manual_reminder = Reminder.objects.get(id=response.data["id"])
+    card.refresh_from_db()
+    assert own_system_reminder.status == Reminder.STATUS_EXPIRED
+    assert other_staff_reminder.status == Reminder.STATUS_PENDING
+    assert manual_reminder.staff_id == primary_staff.id
+    assert manual_reminder.is_manual is True
+    assert card.next_remind_at == manual_reminder.remind_at
 
-    assert reminder_response.status_code == 200
-    assert reminder_response.data["count"] == 1
-    item = reminder_response.data["results"][0]
-    assert item["is_manual"] is True
-    assert item["remind_at"].startswith("2026-03-18T17:00:00+08:00")
 
+def test_non_owner_cannot_create_manual_user_reminder(auth_client, create_customer_profile, create_staff):
+    owner = create_staff(name="用户负责人H")
+    other_staff = create_staff(name="无权限红娘H")
+    user = create_customer_profile(owner=owner, phone="13902001006", wechat="manual_forbidden_user")
 
-def test_status_and_target_type_filters_apply_to_derived_reminders(auth_client, create_match_card, create_staff):
-    male_staff = create_staff(name="男方红娘E")
-    female_staff = create_staff(name="女方红娘E")
-    create_match_card(male_staff=male_staff, female_staff=female_staff, primary_staff=male_staff)
+    response = auth_client(other_staff).post(
+        "/api/v1/reminders/manual/",
+        {
+            "target_type": Reminder.TARGET_USER,
+            "target_id": user.id,
+            "remind_at": "2026-03-18T09:00:00Z",
+        },
+        format="json",
+    )
 
-    pending_response = auth_client(male_staff).get("/api/v1/reminders/?status=pending&target_type=match_card")
-    processed_response = auth_client(male_staff).get("/api/v1/reminders/?status=processed")
-
-    assert pending_response.status_code == 200
-    assert pending_response.data["count"] == 1
-    assert processed_response.status_code == 200
-    assert processed_response.data["count"] == 0
+    assert response.status_code == 403
+    assert response.data["code"] == "PERMISSION_DENIED"
 
 
 def test_receiver_can_process_persisted_reminder(auth_client, create_customer_profile, create_staff):
