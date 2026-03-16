@@ -5,289 +5,203 @@
 - 本清单按当前仓库真实实现状态维护，不沿用旧结论。
 - 状态分为：**已完成 / 部分完成 / 未完成**。
 - 判断依据以 `matchmaker_server` 当前代码、迁移、接口和测试为准。
+- 最后一次全面对齐：2026-03-16，全量测试 295 条通过。
 
 ---
 
 ### 已完成
 
 - **`[blocker]` A1 — 修复 met_not_continue 状态流转逻辑**
-  - 当前已实现：
-    - 进入 `met_not_continue` 已从白名单放开
-    - 退出 `met_not_continue` 按 BR-POOL-002 校验：需存在 `scene=unmatched` + `failure_reason_id IS NOT NULL` + `created_at > 进入时间` 的跟进记录
-    - 旧轮次失败跟进不会误算进本轮退出条件
-  - 测试现状：
-    - 已覆盖进入成功、退出无记录拦截、退出有记录放行、旧记录不计入
-  - 完成判定：
-    - 当前代码和测试均满足，视为完成
+  - 进入/退出 `met_not_continue` 已按 BR-POOL-002 实现，含旧轮次隔离
+  - 测试覆盖：进入成功、退出无记录拦截、退出有记录放行、旧记录不计入
 
 - **`[blocker]` A2 — 补齐 last_unmatched_active_at 更新逻辑**
-  - 当前已实现：
-    - `create_customer_profile()` 创建用户时，初始化 `last_unmatched_active_at = created_at`
-    - `change_user_status()`: `to_status != paused` 时更新 `last_unmatched_active_at`
-    - `resume_user()`: 恢复到活跃未配对状态时更新
-    - `pause_user()`: 不更新
-    - `followup` 的 `scene=unmatched` 写入时会更新
-    - 配对卡结束回流到未配对池时会更新
-  - 测试现状：
-    - 已覆盖红娘 API 创建用户即初始化 baseline
-    - 已覆盖 admin API 创建用户即初始化 baseline
-    - 已覆盖创建后再做状态变更时，`last_unmatched_active_at` 被后续更新时间正确覆盖
-    - 已覆盖状态变更更新、pause 不更新、resume 更新、admin force→paused 不更新
-  - 完成判定：
-    - 当前代码和测试均满足，视为完成
+  - 创建用户时初始化为 created_at
+  - 状态变更、followup(scene=unmatched)、发起推荐、配对结束回流均已更新
+  - pause 不更新，resume 更新
+  - 测试覆盖：创建初始化、状态变更、pause/resume 行为对比
 
 - **`[high priority]` A3 — 放开 admin 的 owner_id 变更**
-  - 当前已实现：
-    - 按 BR-TRANSFER-003，`admin + force=true + force_reason` 可修改 `owner_id`
-    - matchmaker 仍被 PermissionDenied 拦截
-    - 变更后会写入 `operation_log`（`action=admin_force_change`）
-    - 会同步更新该用户涉及的进行中配对卡侧边红娘字段：
-      - 用户作为男方时更新 `male_staff_id`
-      - 用户作为女方时更新 `female_staff_id`
-      - `primary_staff_id` 不自动变更
-    - 会同步更新 `user.last_action_at`
-    - 当前仓库中的 reminder 为派生式列表，接收人取自进行中配对卡的侧边 staff 字段；因此配对卡侧边字段同步后，当前 reminder 接收人语义已自动对齐
-  - 测试现状：
-    - 已覆盖 admin 成功、缺 force 被拒、缺 reason 被拒、matchmaker 被拒
-    - 已覆盖男方侧进行中配对卡同步、女方侧进行中配对卡同步、非进行中配对卡不误改、无关用户/无关 active 配对卡不误伤、derived reminder 接收人切换、`last_action_at` 更新
-  - 完成判定：
-    - 按当前文档口径与当前仓库实现方式，视为完成
+  - admin + force=true + force_reason 可修改 owner_id（BR-TRANSFER-003）
+  - 变更后同步进行中配对卡侧边 staff 字段 + pending 提醒接收人 + last_action_at
+  - oplog 写入 action=admin_force_change
+  - matchmaker 仍被 PermissionDenied 拦截
+  - 测试覆盖：成功路径、缺 force、缺 reason、matchmaker 被拒、配对卡同步、提醒同步
 
 - **`[high priority]` A4 — 扩展用户详情可见性权限**
-  - 当前已实现：
-    - owner 可读可写
-    - admin 可读可写
-    - 配对卡关联方（`male_staff` / `female_staff` / `primary_staff`）可查看用户详情
-    - 关联方仅限只读，不获得 PATCH / PUT 权限
-    - 非关联红娘仍无权访问
-  - 当前口径：
-    - 用户详情查看范围按“任意历史/当前配对卡”处理，包含 `success / ended`
-    - 写权限仍仅限 owner 或 admin
-  - 测试现状：
-    - 已覆盖 owner 可读可写
-    - 已覆盖关联红娘可只读
-    - 已覆盖非关联红娘无权访问
-    - 已覆盖关联红娘不能写
-  - 完成判定：
-    - 当前代码和测试均满足，视为完成
+  - owner 可读可写；admin 可读可写；配对卡关联方（male/female/primary_staff）只读
+  - 关联方范围：任意历史/当前配对卡（含 success/ended）
+  - 测试覆盖：owner 可读写、关联红娘只读、非关联红娘无权限、关联红娘不能写
 
 - **`[high priority]` A5 — 确认 success_application 阶段前置条件**
-  - 当前已实现：
-    - `apps/success/services.py` 已将前置阶段校验改为 `stage=stable_contact`
-    - 创建成功申请后会自动推进配对卡到 `success_pending_review`
-    - 审批通过/驳回链路与当前 success 模块测试一致
-  - 测试现状：
-    - 已覆盖 `stable_contact` 才能发起、创建后自动推进阶段、时长不足拦截、重复 pending 拦截等路径
-  - 完成判定：
-    - 当前代码和测试均满足，视为完成
+  - 前置阶段改为 stage=stable_contact
+  - 创建后自动推进配对卡到 success_pending_review
+  - 审批通过/驳回链路完整
+  - 测试覆盖：stable_contact 才能发起、自动推进、时长不足拦截、重复 pending 拦截
 
 - **`[blocker]` C1 — Phase A 修复的测试覆盖**
-  - 当前已实现：
-    - A1-A5 已按最新口径具备明确测试覆盖
-    - A2 相关测试工厂默认 baseline 已与当前创建语义对齐；如需显式构造 `NULL` baseline，仍可在单测中显式传值
-    - 当前全量测试 `177` 条通过
-  - 完成判定：
-    - 当前代码和测试均满足，视为完成
-
-- **`[blocker]` B1 — Reminder 模型与迁移**
-  - 当前已实现：
-    - `apps/reminder/models.py` 已落地 `Reminder` 模型
-    - `apps/reminder/migrations/0001_initial.py` 已创建 `reminder` 表
-    - 已按文档补齐 `target_type / target_id / staff_id / remind_type / remind_at / status / processed_at / is_manual / created_at`
-    - 已补齐 `target_type`、`remind_type`、`status` 的枚举约束
-    - 已补齐 `staff_id + status + remind_at`、`target_type + target_id`、`remind_at + status` 三组索引
-  - 当前口径：
-    - B1 仅完成 Reminder 表结构与迁移，不改现有派生式 reminder 服务
-    - 当前 `/reminders/` 仍沿用派生逻辑，Reminder 表将在 B2/B3 再接入
-  - 测试现状：
-    - 已覆盖 migration 建表、字段、外键、索引、基础 check constraint
-    - 已覆盖 Reminder 模型默认值与非法枚举值约束
-  - 完成判定：
-    - 当前模型、迁移和基础测试均满足，视为完成
-
-- **`[high priority]` B2 — Reminder 服务层改造**
-  - 当前已实现：
-    - `apps/reminder/services.py` 已补齐 Reminder 表基础 service：
-      - `build_persisted_reminder_queryset()`
-      - `create_reminder()`
-      - `process_reminder()`
-      - `expire_reminder()`
-      - `expire_target_reminders()`
-    - `refresh_match_card_next_remind_at()` 已兼容 Reminder 表：
-      - 若该配对卡已存在持久化回访类 Reminder，则按 Reminder 表中“未完成记录最早 remind_at”回写
-      - 若该配对卡尚无持久化 Reminder，则继续沿用原派生式逻辑
-    - `first_meet_overdue` 处理时，已支持自动生成 `scene=unmatched` 的跟进记录，并更新目标用户 `last_action_at / last_unmatched_active_at`
-  - 当前口径：
-    - 当前 `/reminders/` 列表仍走派生逻辑，不切换到 Reminder 表
-    - B2 先提供 Reminder 表的写入 / 查询 / 处理 / 失效基础能力，为 B3 API 接入打底，避免现有提醒列表 `id` 语义突变
-  - 测试现状：
-    - 已覆盖 Reminder 创建
-    - 已覆盖 Reminder 持久化 query 的权限与筛选
-    - 已覆盖普通 Reminder 处理
-    - 已覆盖 `first_meet_overdue` 处理闭环
-    - 已覆盖 Reminder 失效 / 取消
-    - 已覆盖 `refresh_match_card_next_remind_at()` 与现有派生逻辑的兼容行为
-    - 现有 reminder 派生列表测试继续通过
-  - 完成判定：
-    - 当前服务层实现和测试均满足，视为完成
-
-- **`[high priority]` B3 — Reminder API 端点**
-  - 当前已实现：
-    - `GET /reminders/` 已完全切换到 persisted 单轨，基于 `build_persisted_reminder_queryset()`
-    - `POST /reminders/{id}/process/` 基于 persisted `Reminder.id` 调用服务层，完整支持权限检查与 `first_meet_overdue` 闭环
-    - `POST /reminders/manual/` 已实现，基于 `create_manual_reminder()`，旧提醒自动失效，配对卡 `next_remind_at` 自动刷新
-    - 三个端点均已注册到 `urls.py`
-    - 派生式 `build_reminder_list()` 已确认无调用方，已于阶段1整理时删除
-  - 测试现状：
-    - 已覆盖 persisted 列表权限过滤、matchmaker/admin 筛选、类型/状态/时间范围筛选
-    - 已覆盖 matched_revisit / success_revisit 出现在 persisted 列表
-    - 已覆盖 manual 创建、覆盖旧系统提醒、权限拒绝
-    - 已覆盖 process 权限检查、重复处理拒绝、first_meet_overdue 闭环
-    - 全量测试 186 条通过
-  - 完成判定：
-    - API 三端点均完整实现并有测试覆盖，与 `06_api_contract_v1_1_2.md §11` 对齐，视为完成
-
-- **`[high priority]` B4 — Recommendation 模型与迁移**
-  - 当前已实现：
-    - `apps/recommendation/models.py`：`RecommendationBatch` + `RecommendationCandidate` 两张表
-    - `apps/recommendation/migrations/0001_initial.py`：建表 + 索引 + check constraint
-    - `RecommendationBatch`：`user_id / staff_id / batch_no(unique) / candidate_count / status / created_at / closed_at`；INDEX(user_id, created_at)、INDEX(staff_id)；status check constraint
-    - `RecommendationCandidate`：`batch_id / candidate_user_id / is_selected / is_met / result / created_at / updated_at`；INDEX(batch_id)、INDEX(candidate_user_id)；result check constraint
-    - `tests/migrations/test_0006_recommendation_core.py`：建表/字段/索引/约束合约测试
-    - `tests/apps/recommendation/test_recommendation_model_contract.py`：模型默认值、唯一约束、枚举约束
-  - 完成判定：
-    - 模型、迁移、测试均满足，视为完成
-
-- **`[high priority]` B5 — Recommendation 服务与 API**
-  - 当前已实现：
-    - `apps/recommendation/services.py`：`create_recommendation_batch()` / `select_candidate()` / `close_recommendation_batch()`
-    - BR-REC-001（状态+资料完整性校验）、BR-REC-002（候选人数量限制）、BR-REC-003（重复候选人警告）、BR-REC-005（关闭无选中回退状态）、BR-REC-006（更新 last_action_at）、Addendum §3（更新 last_unmatched_active_at）
-    - `apps/recommendation/serializers.py`：`RecommendationBatchSerializer` / `RecommendationCandidateSerializer` / `RecommendationBatchCreateSerializer`
-    - `apps/recommendation/views.py`：`RecommendationBatchListCreateView` / `CandidateSelectView` / `BatchCloseView`
-    - `apps/recommendation/urls.py`：三端点路由，已注册在 `config/urls.py`
-    - `tests/apps/recommendation/test_recommendation_api.py`：17条 API 测试，覆盖权限、BR-REC-001/002/003/005/006、批次列表过滤
-    - 全量测试 218 条通过
-  - 权限模型：matchmaker 只能管理自己负责用户的批次（user.owner_id == actor.id）；admin 全局访问
-  - 批次号格式：`REC-YYYYMMDD-NNN`（当日顺序递增）
-  - 完成判定：
-    - 主链（创建→候选人→确认→关闭）完整走通，API 契约与文档一致，视为完成
-
-- **`[normal]` C4 — Reminder 模块测试**
-  - 当前已实现：
-    - `tests/migrations/test_0004_reminder_core.py`：建表/字段/外键/索引/check constraint
-    - `tests/apps/reminder/test_reminder_model_contract.py`：模型默认值与枚举约束
-    - `tests/apps/reminder/test_reminder_service.py`：服务层持久化 query / create / process / expire / refresh
-    - `tests/apps/reminder/test_reminder_api.py`：GET 列表（12条）、POST manual（2条）、POST process（4条）
-    - 合计 reminder 相关测试 30+ 条，全部通过
-  - 当前缺口：
-    - `tasks.py` 仍是占位，缺 Celery task 单元测试（依赖后续 Celery 基础设施接入）
-  - 完成判定：
-    - 核心路径已覆盖，仅 Celery task 层待补，视为**接近完成**，不阻塞 B4 推进
+  - A1-A5 均有明确测试覆盖，全量测试通过
 
 - **`[normal]` A6 — 统一 operation_log 字段模型**
-  - 当前已实现：
-    - `operation_log` 底层 canonical schema 明确保持为 `operator / action / target_type / target_id / before_json / after_json / reason / created_at`
-    - 已补齐索引：
-      - `target_type + target_id + created_at`
-      - `operator_id + created_at`
-      - `created_at`
-    - 已新增 `apps/oplog/services.py::create_operation_log()` 共享 helper
-    - `user / matchcard / success` 现有写日志入口已最小收口到 helper，不再分散直接写 `OperationLog.objects.create()` 
-    - `docs/03_database_schema_v1_1_1.md` 与 `docs/06_api_contract_v1_1_2.md` 已按 `before_json / after_json` 口径对齐
-  - 当前口径：
-    - `field_changed / old_value / new_value` 不再作为底层 schema 字段；如未来需要，只作为展示层派生口径
-    - 本次不实现 operation_log API；查询接口仍归 B8
-  - 测试现状：
-    - 已覆盖 model 字段与索引 contract
-    - 已覆盖 migration 后表结构与索引
-    - 已覆盖 `create_operation_log()` helper 基本写入
-  - 完成判定：
-    - 当前模型、迁移、helper、文档和最小测试已形成闭环，视为完成
+  - canonical schema：operator/action/target_type/target_id/before_json/after_json/reason/created_at
+  - 已补齐三组索引：target_type+target_id+created_at、operator_id+created_at、created_at
+  - create_operation_log() 共享 helper 已落地，各模块均已收口
+  - 测试覆盖：model contract、migration contract、helper 写入
+
+- **`[high priority]` B1 — Reminder 模型与迁移**
+  - Reminder 表已落地，含 target_type/target_id/staff_id/remind_type/remind_at/status/processed_at/is_manual/created_at
+  - 三组索引：staff_id+status+remind_at、target_type+target_id、remind_at+status
+  - status/target_type/remind_type check constraint 已落地
+  - 测试覆盖：migration contract、模型默认值与枚举约束
+
+- **`[high priority]` B2 — Reminder 服务层改造**
+  - build_persisted_reminder_queryset()、create_reminder()、process_reminder()
+  - expire_reminder()、expire_target_reminders()
+  - refresh_match_card_next_remind_at() 已兼容持久化 Reminder 表
+  - first_meet_overdue 处理：自动生成 scene=unmatched 跟进记录，更新 last_action_at/last_unmatched_active_at
+  - 测试覆盖：创建、query、process、expire、refresh、first_meet_overdue 闭环
+
+- **`[high priority]` B3 — Reminder API 端点**
+  - GET /api/v1/reminders/：已切换到 persisted 单轨（build_persisted_reminder_queryset）
+  - POST /api/v1/reminders/{id}/process/：基于 persisted Reminder.id
+  - POST /api/v1/reminders/manual/：基于 create_manual_reminder()，旧提醒自动失效
+  - 三端点均已注册；派生式 build_reminder_list() 已删除
+  - 测试覆盖：列表权限/筛选、manual 创建覆盖、process 权限/重复/first_meet_overdue
+
+- **`[high priority]` B4 — Recommendation 模型与迁移**
+  - RecommendationBatch + RecommendationCandidate 两张表
+  - 批次号 REC-YYYYMMDD-NNN；status/result check constraint；INDEX 齐全
+  - 测试覆盖：migration contract、模型默认值、唯一约束、枚举约束
+
+- **`[high priority]` B5 — Recommendation 服务与 API**
+  - create_recommendation_batch()：BR-REC-001/002/003/006 + Addendum §3
+  - select_candidate()：S3→S4 状态推进
+  - close_recommendation_batch()：BR-REC-005（关闭无选中回退+待重新推荐标签）
+  - API：POST/GET /recommendations/、POST /candidates/{id}/select/、POST /{id}/close/
+  - 权限：matchmaker 只管理自己负责用户的批次；admin 全局
+  - 批次号格式：REC-YYYYMMDD-NNN（当日顺序递增）
+  - 测试覆盖：19 条，覆盖权限、BR-REC-001/002/003/005/006、批次列表过滤
+  - **未实现：** GET /recommendations/candidate-search/（§6.5，BR-REC-004），候选人搜索端点未落地
+
+- **`[high priority]` C2 — Recommendation 模块测试**（已随 B5 完成）
+
+- **`[high priority]` B6 — Transfer 模型与迁移**
+  - UserTransferRequest 表：id/user_id/from_staff_id/to_staff_id/reason/status/reviewer_id/review_note/reviewed_at/created_at
+  - status enum: pending/approved/rejected；check constraint 已落地
+  - INDEX(user_id)、INDEX(status)、INDEX(from_staff_id)
+  - 测试覆盖：migration contract（6条）、模型 contract（8条）
+
+- **`[high priority]` B7 — Transfer 服务与 API**
+  - create_transfer_request()：BR-TRANSFER-001 全部校验
+  - approve_transfer_request()：BR-TRANSFER-002（owner 变更+matchcard sync+reminder sync+oplog）
+  - reject_transfer_request()：status→rejected + oplog
+  - API：POST/GET /transfer-requests/、POST /{id}/approve/、POST /{id}/reject/
+  - 权限：matchmaker 只能为自己负责的用户发起，GET 只看自己的；admin 审批全局
+  - 审批通过联动：user.owner_id、last_action_at 变更；active matchcard 同步；pending reminder 接收人同步；oplog 写入
+  - 测试覆盖：18 条，覆盖权限、BR-TRANSFER-001/002、驳回、列表筛选
+  - **未实现：** 微信消息通知（BR-TRANSFER-002 步骤5/6），依赖 WeChat 基础设施
+
+- **`[high priority]` C3 — Transfer 模块测试**（已随 B7 完成）
+
+- **`[normal]` B8 — OpLog 序列化与 API**
+  - GET /api/v1/operation-logs/；admin only
+  - 过滤：target_type、target_id、operator_id、action、created_at_after、created_at_before
+  - 分页：DefaultPageNumberPagination（count/page/page_size/results）
+  - action_display 映射表（16 个已知 action 已覆盖）
+  - 测试覆盖：12 条，权限/字段/过滤/分页/排序
+
+- **`[normal]` B9 — Dashboard API**（部分完成，详见"部分完成"节）
+
+- **`[normal]` B10 — Search API**
+  - GET /api/v1/search/?q=...
+  - 关键词匹配：name/phone/wechat（icontains）
+  - 过滤：pool_status、owner_id（admin 专用）
+  - 权限：matchmaker 只看 owner 或配对卡相关用户（与 A4 口径一致）；admin 全局
+  - 返回字段含 match_field、active_match_card_id（子查询注解）
+  - 测试覆盖：17 条，权限/结构/关键词/过滤/权限范围/active_card
+
+- **`[normal]` C4 — Reminder 模块测试**
+  - migration contract、模型 contract、服务层、API 共 30+ 条，全部通过
+  - 待补：Celery task 单元测试（依赖 Celery 基础设施接入）
+
+---
+
+### 部分完成
+
+- **`[normal]` B9 — Dashboard API（已实现统计部分，未实现明细列表）**
+  - **已实现：**
+    - GET /api/v1/dashboard/matchmaker/：用户池各状态计数、active 配对卡计数、pending 提醒计数
+    - GET /api/v1/dashboard/admin/：全局用户池计数、配对卡计数（含 high_risk）、pending 提醒、pending_approvals（transfer+success）
+    - 权限：matchmaker → /matchmaker/（数据范围限定自己）；admin → /admin/（全局）
+    - 测试覆盖：14 条，权限/结构/过滤/计数正确性
+  - **未实现（文档 §12.1 明细项）：**
+    - unmatched_overdue.items：带 priority_score / overdue_days 的超时用户明细列表（BR-SORT-001）
+    - matched_pending_visit.items：带 priority_score / overdue_days 的配对卡明细列表
+    - today_processed.count：当日已处理数
+    - recent_new.items：近期新用户列表
+    - overdue_summary.by_staff：按红娘拆分超时数（admin §12.2）
 
 ---
 
 ### 未完成
 
-- **`[high priority]` B6 — Transfer 模型与迁移**
-  - 文件：`apps/transfer/models.py`
-  - 当前实际情况：
-    - 当前为空占位，迁移未落地
-  - 完成判定：
-    - 创建 `UserTransferRequest` 表并通过迁移
+- **`[blocker]` Celery 定时任务 — Reminder 自动生成**
+  - 依赖 Celery + Redis/RabbitMQ 基础设施
+  - `apps/reminder/tasks.py` 当前仍为占位文件
+  - 未自动生成的 reminder 类型：
+    - followup_timeout（未配对跟进超时）
+    - first_meet_pending / first_meet_delayed / first_meet_warning / first_meet_overdue（首见提醒系列）
+    - pause_revisit（暂停回访）
+  - 已自动生成的：matched_revisit（配对卡推进时创建）、success_revisit（成功申请时创建）、manual（手动创建）
+  - 注：process_reminder() 中 first_meet_overdue 的处理逻辑（写 followup + 更新 last_action_at）已实现；自动生成该类型的定时任务尚未实现
 
-- **`[high priority]` B7 — Transfer 服务与 API**
-  - 文件：`apps/transfer/services.py`、`views.py`、`serializers.py`、`urls.py`
-  - 当前实际情况：
-    - 当前为空占位或空路由
-  - 依赖：
-    - B6、A3 补齐 owner 变更联动
-  - 完成判定：
-    - 转移审批通过后 `user.owner_id` 正确变更，操作日志完整
+- **`[normal]` GET /recommendations/candidate-search/（BR-REC-004）**
+  - 文档 §6.5 已定义，但代码中 recommendation/urls.py 未注册此端点
+  - 功能：在候选人池中搜索（排除暂停/配对中/同性），配合推荐流程使用
+  - 当前可用 GET /api/v1/search/ 做基础搜索替代，但语义不完全一致
 
-- **`[normal]` B8 — OpLog 序列化与 API**
-  - 文件：`apps/oplog/serializers.py`、`apps/oplog/views.py`
-  - 当前实际情况：
-    - 只有 `OperationLog` 模型，API 仍未实现
-  - 完成判定：
-    - 可按 `target_type + target_id` 查询操作日志，仅 admin 可访问
+- **`[normal]` WeChat 微信消息通知**
+  - BR-TRANSFER-002 §5/6、审批通知链路均未实现
+  - 依赖企业微信/小程序消息基础设施
 
-- **`[normal]` B9 — Dashboard API**
-  - 文件：`apps/dashboard/views.py`、`services.py`
-  - 当前实际情况：
-    - 当前为空占位或空路由
-  - 完成判定：
-    - 返回结构与 API 契约一致，matchmaker 仅看到自己数据
+- **`[normal]` Dashboard 明细列表（priority_score / overdue_days）**
+  - 已在 B9 部分实现节详述
+  - 涉及 BR-SORT-001 优先级算法，属于前端体验优化项
 
-- **`[normal]` B10 — Search API**
-  - 文件：`apps/search/views.py`、`services.py`
-  - 当前实际情况：
-    - 当前为空占位或空路由
-  - 完成判定：
-    - 搜索结果包含用户基础信息 + 所属红娘，权限过滤正确
-
-- **`[high priority]` C2 — Recommendation 模块测试** ✅（已随 B5 完成）
-  - `tests/apps/recommendation/test_recommendation_api.py`：17条，覆盖权限边界与所有 BR-REC 规则
-
-- **`[high priority]` C3 — Transfer 模块测试**
-  - 文件：`tests/test_transfer.py`
-  - 当前实际情况：
-    - 模块本体尚未落地，对应测试未开始
-  - 完成判定：
-    - 转移模块核心路径 ≥8 条测试
-
-- **`[normal]` C5 — 文档对齐收尾**
-  - 文件：`docs/03_database_schema_v1_1_1.md`、`docs/06_api_contract_v1_1_2.md`
-  - 当前实际情况：
-    - A3/A6/Reminder 等文档与代码仍存在偏差
-  - 完成判定：
-    - 文档中所有表/字段/API 定义与最新代码一致，无遗留 TODO 标记
-
----
-
-### 当前最建议的执行顺序
-
-| 顺序 | 任务 | 原因 / 前置 |
-|------|------|-------------|
-| 1 | ~~B3~~ ✅ | 已完成，三端点均落地并有测试 |
-| 2 | ~~B4~~ ✅ | Recommendation 模型与迁移已落地 |
-| 3 | ~~B5~~ ✅ | Recommendation 服务与 API，含 last_unmatched_active_at 联动 |
-| 4 | B6 | Transfer 模型与迁移 |
-| 5 | B7 | Transfer 服务与 API |
-| 6 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
-| 7 | ~~C2~~ ✅, C3, ~~C4~~, C5 | 模块完成后集中补测试与文档对齐；C2/C4 核心已完成 |
+- **`[normal]` C5 — 文档对齐收尾**（本任务正在执行）
 
 ---
 
 ### 后续清理项
 
-- **`[normal]` 清理 last_unmatched_active_at 的 NULL baseline 历史/绕过链路问题**
-  - 当前情况：
-    - 通过正常用户创建链路，`last_unmatched_active_at` 已初始化为 `created_at`
-    - 但历史旧数据，以及测试工厂或未来绕过 service 直接 `CustomerProfile.objects.create()` 的路径，仍可能留下 `last_unmatched_active_at = NULL`
-  - 为什么现在不阻塞提交：
-    - A2 当前验收范围仅要求补齐正常创建链路初始化，现有状态流转、pause/resume、未配对跟进、配对结束回流逻辑均未被破坏
-    - 当前仓库尚未落地基于该字段的完整 reminder 持久化与超时计算闭环，因此该问题属于后续数据治理与兜底完善项
-  - 后续建议动作：
-    - 增加一次性数据修复脚本或 migration backfill，将历史 `NULL` baseline 回填为合适基准
-    - 为后续依赖该字段的提醒、超时判断、未配对池停留时长计算增加 `NULL` 兜底策略
-    - 统一测试工厂与创建辅助方法，避免继续直接造出 `NULL` baseline
+- **清理 last_unmatched_active_at 的 NULL baseline 历史数据**
+  - 历史旧数据和测试工厂绕过 service 直接 create() 的路径仍可能留下 NULL
+  - 建议：一次性 migration backfill + 兜底策略（NULL 时 fallback 到 created_at）
+  - 不阻塞当前功能
+
+- **action_display 映射表后续维护**
+  - apps/oplog/serializers.py 中维护了 ACTION_DISPLAY_MAP
+  - 新增 action 时需手动同步更新
+
+- **Dashboard 统计查询性能**
+  - 当前逐状态独立 count()，随数据量增长可考虑合并为 annotate + values + Count
+
+---
+
+### 当前全量测试状态
+
+- 全量测试：**295 条**，全部通过（2026-03-16）
+- 分布：user/matchcard/followup/success/reminder/recommendation/transfer/oplog/dashboard/search/migration/model contract
+
+---
+
+### 执行顺序建议（后续）
+
+| 优先级 | 任务 | 前置条件 |
+|--------|------|---------|
+| 1 | Celery 基础设施接入 | Redis/RabbitMQ 环境 |
+| 2 | Reminder 自动生成定时任务 | Celery 接入 |
+| 3 | candidate-search 端点（BR-REC-004） | 无硬前置 |
+| 4 | Dashboard 明细列表（priority_score） | 无硬前置 |
+| 5 | WeChat 通知 | 企微基础设施 |
+| 6 | 闭环 13-16（前端/小程序/联调/安全审计） | 后端 API 全部完成 |

@@ -8,6 +8,21 @@
 
 ---
 
+## ⚠️ 实现状态标注（2026-03-16）
+
+本 Addendum 所有 4 项追加修正已全部吸收进 `matchmaker_server` 代码库：
+
+| 追加修正 | 核心内容 | 实现状态 |
+|--------|---------|---------|
+| 追加1（同侧计数） | 同一红娘双侧各提交一条跟进，按 user_id 区分 | ✅ followup 服务已按此逻辑实现 |
+| 追加2（next_remind_mode） | 跟进请求体新增 next_remind_mode 字段（manual/default） | ✅ FollowUpRecord 已有 next_remind_mode 字段；服务层校验已实现 |
+| 追加3（last_unmatched_active_at） | user 表新增字段，有效动作后更新 | ✅ 字段已落地；创建/状态变更/followup/推荐/暂停恢复均已同步 |
+| 追加4（汇总表编号） | 补丁汇总表编号从 Issue# 改为补丁序号 | ✅ 文档修正（不涉及代码） |
+
+**注：** `last_unmatched_active_at` 历史存量 NULL 值的一次性 backfill migration 尚未执行（非阻塞，详见 TODO.md 清理项）。
+
+---
+
 ## 追加修正 1：同一红娘双侧计数规则矛盾
 
 ### 问题

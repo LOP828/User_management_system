@@ -645,6 +645,8 @@ POST /api/v1/recommendations/{batch_id}/close/
 
 ### 6.5 候选人搜索（推荐用）
 
+> **⚠️ 实现状态（2026-03-16）：未实现。** 此端点在 `recommendation/urls.py` 中未注册。当前可用 `GET /api/v1/search/` 做基础关键词搜索替代，但语义不完全一致（不含重复推荐警告逻辑）。
+
 ```
 GET /api/v1/recommendations/candidate-search/?user_id={id}&search={keyword}
 ```
@@ -1453,6 +1455,8 @@ POST /api/v1/reminders/manual/
 
 ## 12. 首页聚合接口（Dashboard）
 
+> **⚠️ 实现状态（2026-03-16）：部分实现。** 统计计数字段已实现；`items` 明细列表（含 `priority_score` / `overdue_days`）、`today_processed.count`、`recent_new.items`、`overdue_summary.by_staff` 均未实现。当前实际响应只包含计数（count）字段，不含 items 数组。详见 TODO.md。
+
 ### 12.1 红娘首页
 
 ```
@@ -1461,7 +1465,28 @@ GET /api/v1/dashboard/matchmaker/
 
 **权限：** matchmaker
 
-**成功响应（200）：**
+**实际响应（已实现，2026-03-16）：**
+```json
+{
+  "user_pool": {
+    "new_pending": 0,
+    "communicated_pending_recommend": 0,
+    "recommended_pending_select": 0,
+    "selected_pending_meet": 0,
+    "met_not_continue": 0,
+    "paused": 0
+  },
+  "match_cards": {
+    "active": 0,
+    "success_pending_review": 0
+  },
+  "reminders": {
+    "pending": 0
+  }
+}
+```
+
+**文档定义响应（未实现，保留供参考）：**
 ```json
 {
   "unmatched_overdue": {
@@ -1520,7 +1545,34 @@ GET /api/v1/dashboard/admin/
 
 **权限：** admin
 
-**成功响应（200）：**
+**实际响应（已实现，2026-03-16）：**
+```json
+{
+  "user_pool": {
+    "new_pending": 0,
+    "communicated_pending_recommend": 0,
+    "recommended_pending_select": 0,
+    "selected_pending_meet": 0,
+    "met_not_continue": 0,
+    "paused": 0
+  },
+  "match_cards": {
+    "active": 0,
+    "high_risk": 0,
+    "success": 0,
+    "success_pending_review": 0
+  },
+  "reminders": {
+    "pending": 0
+  },
+  "pending_approvals": {
+    "transfer_count": 0,
+    "success_count": 0
+  }
+}
+```
+
+**文档定义响应（未实现，保留供参考）：**
 ```json
 {
   "overdue_summary": {
