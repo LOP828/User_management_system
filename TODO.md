@@ -154,8 +154,13 @@
     - 测试覆盖：20 条，含边界/幂等/跳过条件，全部通过
   - **仍未实现：**
     - `pause_revisit`（BR-REMIND-002）：阻塞——user 表无 `paused_at` 字段，BR-REMIND-002 "用户进入暂停的时间"无法直接取得
-    - Celery Beat 调度配置（CELERY_BEAT_SCHEDULE）：任务函数已就绪，需配置定时计划
     - 微信消息实际发送（BR-REMIND-007）：依赖企业微信基础设施
+  - **Celery Beat 调度配置（已完成）：**
+    - `config/__init__.py` 补 celery app import（标准 Django+Celery 初始化）
+    - `CELERY_BEAT_SCHEDULE` 已在 `settings/base.py` 配置：followup_timeout（00:05）、first_meet（00:10）
+    - `CELERY_TIMEZONE`、`CELERY_TASK_SERIALIZER`、`CELERY_ACCEPT_CONTENT` 已配置
+    - 启动命令：`celery -A config worker -l info` + `celery -A config beat -l info`
+    - 测试覆盖：7 条配置验证（schedule 存在性、task 名称一致性、时区一致性、序列化格式）
   - 已自动生成的完整列表：matched_revisit（配对卡推进时）、success_revisit（成功申请时）、manual（手动创建）、followup_timeout、first_meet_* 系列
 
 - **`[normal]` GET /recommendations/candidate-search/（BR-REC-004）**
@@ -193,7 +198,7 @@
 
 ### 当前全量测试状态
 
-- 全量测试：**315 条**，全部通过（2026-03-16）
+- 全量测试：**322 条**，全部通过（2026-03-16）
 - 分布：user/matchcard/followup/success/reminder/recommendation/transfer/oplog/dashboard/search/migration/model contract
 
 ---

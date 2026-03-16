@@ -119,3 +119,37 @@ SIMPLE_JWT = {
 
 CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
 CELERY_RESULT_BACKEND = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+
+# Celery 序列化与时区
+# 显式指定 JSON，与 Django REST Framework 保持一致，避免不安全的 pickle 序列化。
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT = ["json"]
+# Beat 调度时区与 Django TIME_ZONE 保持一致（Asia/Shanghai）。
+CELERY_TIMEZONE = os.getenv("TIME_ZONE", "Asia/Shanghai")
+
+# ---------------------------------------------------------------------------
+# Celery Beat 定时调度
+# ---------------------------------------------------------------------------
+# 启动命令（需先启动 Redis，再分别启动 worker 和 beat）：
+#   celery -A config worker -l info
+#   celery -A config beat   -l info
+#
+# 触发逻辑说明：
+#   - 凌晨运行：提醒生成后，等待早晨 09:00 汇总推送（BR-REMIND-007，WeChat 通知待实现）。
+#   - 两个任务各差 5 分钟，避免同时发起大量 DB 查询。
+# ---------------------------------------------------------------------------
+from celery.schedules import crontab  # noqa: E402
+
+CELERY_BEAT_SCHEDULE = {
+    # BR-REMIND-009：每日凌晨 00:05 扫描未配对跟进超时用户
+    "reminder-scan-followup-timeout": {
+        "task": "reminder.scan_followup_timeout",
+        "schedule": crontab(hour=0, minute=5),
+    },
+    # BR-REMIND-001：每日凌晨 00:10 扫描未首见进度（paid_at 天数）
+    "reminder-scan-first-meet": {
+        "task": "reminder.scan_first_meet",
+        "schedule": crontab(hour=0, minute=10),
+    },
+}
