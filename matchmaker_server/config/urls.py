@@ -12,7 +12,7 @@ urlpatterns = [
     path("api/v1/transfer-requests/", include("apps.transfer.urls")),
     path("api/v1/reminders/", include("apps.reminder.urls")),
     path("api/v1/dashboard/", include("apps.dashboard.urls")),
-    path("api/v1/oplogs/", include("apps.oplog.urls")),
+    path("api/v1/operation-logs/", include("apps.oplog.urls")),
     path("api/v1/", include("apps.config_mgmt.urls")),
     path("api/v1/search/", include("apps.search.urls")),
 ]
