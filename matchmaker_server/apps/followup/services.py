@@ -7,7 +7,8 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from apps.common.exceptions import BusinessRuleError
 from apps.followup.models import FollowUpRecord
 from apps.matchcard.models import MatchCard
-from apps.reminder.services import sync_match_card_revisit_reminders
+from apps.reminder.models import Reminder
+from apps.reminder.services import create_manual_reminder_for_target, sync_match_card_revisit_reminders
 from apps.staff.models import Staff
 
 
@@ -283,6 +284,29 @@ def _touch_match_card_users(match_card):
     match_card.female_user.save(update_fields=["last_action_at", "updated_at"])
 
 
+def _create_followup_manual_reminder_if_needed(follow_up, actor):
+    if follow_up.scene == FollowUpRecord.SCENE_UNMATCHED and follow_up.next_remind_at is not None:
+        create_manual_reminder_for_target(
+            target_type=Reminder.TARGET_USER,
+            target_id=follow_up.user_id,
+            remind_at=follow_up.next_remind_at,
+            actor=actor,
+        )
+        return
+
+    if (
+        follow_up.scene == FollowUpRecord.SCENE_SUCCESS_FOLLOWUP
+        and follow_up.next_remind_mode == FollowUpRecord.REMIND_MANUAL
+        and follow_up.next_remind_at is not None
+    ):
+        create_manual_reminder_for_target(
+            target_type=Reminder.TARGET_MATCH_CARD,
+            target_id=follow_up.match_card_id,
+            remind_at=follow_up.next_remind_at,
+            actor=actor,
+        )
+
+
 @transaction.atomic
 def create_follow_up(validated_data, actor):
     require_supported_scene(validated_data["scene"])
@@ -308,6 +332,7 @@ def create_follow_up(validated_data, actor):
         _touch_followup_user(user)
     else:
         _touch_match_card_users(match_card)
+    _create_followup_manual_reminder_if_needed(follow_up, actor)
     if scene == FollowUpRecord.SCENE_MATCHED and is_valid_follow_up_record(follow_up):
         _refresh_match_card_last_visit_at(match_card)
         sync_match_card_revisit_reminders(match_card)
@@ -342,6 +367,7 @@ def update_follow_up(instance, validated_data, actor):
         _touch_followup_user(instance.user)
     else:
         _touch_match_card_users(instance.match_card)
+    _create_followup_manual_reminder_if_needed(instance, actor)
     if instance.scene == FollowUpRecord.SCENE_MATCHED and is_valid_follow_up_record(instance):
         _refresh_match_card_last_visit_at(instance.match_card)
         sync_match_card_revisit_reminders(instance.match_card)

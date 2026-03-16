@@ -285,9 +285,29 @@ def test_owner_can_create_unmatched_followup(auth_client, create_customer_profil
     assert response.data["next_remind_mode"] == "manual"
     assert response.data["is_valid_visit"] is False
 
+    reminder = Reminder.objects.get(
+        target_type=Reminder.TARGET_USER,
+        target_id=user.id,
+        staff_id=matchmaker_staff.id,
+        remind_type=Reminder.TYPE_MANUAL,
+        status=Reminder.STATUS_PENDING,
+    )
     user.refresh_from_db()
     assert user.last_action_at is not None
     assert user.last_unmatched_active_at is not None
+    reminder_list_response = auth_client(matchmaker_staff).get("/api/v1/reminders/?status=pending&remind_type=manual")
+    assert reminder_list_response.status_code == 200
+    assert reminder_list_response.data["count"] == 1
+    assert reminder_list_response.data["results"][0]["id"] == reminder.id
+
+    process_response = auth_client(matchmaker_staff).post(
+        f"/api/v1/reminders/{reminder.id}/process/",
+        {},
+        format="json",
+    )
+    assert process_response.status_code == 200
+    reminder.refresh_from_db()
+    assert reminder.status == Reminder.STATUS_PROCESSED
 
 
 def test_unmatched_followup_supports_failure_reason(auth_client, create_customer_profile, create_reason_enum, matchmaker_staff):
@@ -381,6 +401,54 @@ def test_primary_staff_can_create_success_followup(auth_client, create_match_car
     card.female_user.refresh_from_db()
     assert card.male_user.last_action_at is not None
     assert card.female_user.last_action_at is not None
+
+
+def test_primary_staff_can_create_success_followup_manual_reminder(auth_client, create_match_card, create_success_case, create_staff):
+    primary_staff = create_staff(name="主操作红娘S1M")
+    card = create_match_card(primary_staff=primary_staff, male_staff=primary_staff, stage=MatchCard.STAGE_SUCCESS)
+    create_success_case(match_card=card)
+
+    response = auth_client(primary_staff).post(
+        "/api/v1/follow-ups/",
+        {
+            "scene": "success_followup",
+            "match_card_id": card.id,
+            "content": "双方计划下月见家长",
+            "is_still_contact": "yes",
+            "next_remind_mode": "manual",
+            "next_remind_at": "2026-04-10T09:00:00Z",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 201
+    reminder = Reminder.objects.get(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff_id=primary_staff.id,
+        remind_type=Reminder.TYPE_MANUAL,
+        status=Reminder.STATUS_PENDING,
+    )
+    card.refresh_from_db()
+    assert reminder.is_manual is True
+    assert reminder.remind_at == follow_up_time("2026-04-10T09:00:00Z")
+    assert card.next_remind_at == reminder.remind_at
+
+    reminder_list_response = auth_client(primary_staff).get("/api/v1/reminders/?status=pending&remind_type=manual")
+    assert reminder_list_response.status_code == 200
+    assert reminder_list_response.data["count"] == 1
+    assert reminder_list_response.data["results"][0]["id"] == reminder.id
+
+    process_response = auth_client(primary_staff).post(
+        f"/api/v1/reminders/{reminder.id}/process/",
+        {},
+        format="json",
+    )
+    assert process_response.status_code == 200
+    reminder.refresh_from_db()
+    card.refresh_from_db()
+    assert reminder.status == Reminder.STATUS_PROCESSED
+    assert card.next_remind_at is None
 
 
 def test_success_followup_requires_success_stage(auth_client, create_match_card, create_staff):
@@ -512,6 +580,72 @@ def test_primary_staff_can_patch_success_followup(
     assert follow_up.content == "双方仍在一起，状态稳定"
     assert follow_up.next_remind_mode == FollowUpRecord.REMIND_MANUAL
     assert follow_up.next_remind_at == follow_up_time("2026-04-01T09:00:00Z")
+    reminder = Reminder.objects.get(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff_id=primary_staff.id,
+        remind_type=Reminder.TYPE_MANUAL,
+        status=Reminder.STATUS_PENDING,
+    )
+    card.refresh_from_db()
+    assert reminder.remind_at == follow_up_time("2026-04-01T09:00:00Z")
+    assert card.next_remind_at == reminder.remind_at
+
+
+def test_patch_success_followup_manual_replaces_old_manual_reminder(
+    auth_client,
+    create_match_card,
+    create_success_case,
+    create_staff,
+):
+    primary_staff = create_staff(name="主操作红娘S6M")
+    card = create_match_card(primary_staff=primary_staff, male_staff=primary_staff, stage=MatchCard.STAGE_SUCCESS)
+    create_success_case(match_card=card)
+
+    create_response = auth_client(primary_staff).post(
+        "/api/v1/follow-ups/",
+        {
+            "scene": "success_followup",
+            "match_card_id": card.id,
+            "content": "第一次成功后回访",
+            "is_still_contact": "yes",
+            "next_remind_mode": "manual",
+            "next_remind_at": "2026-04-01T09:00:00Z",
+        },
+        format="json",
+    )
+    assert create_response.status_code == 201
+    old_reminder = Reminder.objects.get(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff_id=primary_staff.id,
+        remind_type=Reminder.TYPE_MANUAL,
+        status=Reminder.STATUS_PENDING,
+    )
+
+    patch_response = auth_client(primary_staff).patch(
+        f"/api/v1/follow-ups/{create_response.data['id']}/",
+        {
+            "next_remind_mode": "manual",
+            "next_remind_at": "2026-04-20T09:00:00Z",
+        },
+        format="json",
+    )
+
+    assert patch_response.status_code == 200
+    old_reminder.refresh_from_db()
+    new_reminder = Reminder.objects.get(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff_id=primary_staff.id,
+        remind_type=Reminder.TYPE_MANUAL,
+        status=Reminder.STATUS_PENDING,
+    )
+    card.refresh_from_db()
+    assert old_reminder.status == Reminder.STATUS_EXPIRED
+    assert new_reminder.id != old_reminder.id
+    assert new_reminder.remind_at == follow_up_time("2026-04-20T09:00:00Z")
+    assert card.next_remind_at == new_reminder.remind_at
 
 
 def test_male_staff_cannot_create_female_side_followup(auth_client, create_match_card, create_staff):
@@ -702,6 +836,76 @@ def test_owner_can_patch_unmatched_followup(auth_client, create_customer_profile
     assert follow_up.next_remind_at == follow_up_time("2026-03-25T09:00:00Z")
     assert user.last_action_at is not None
     assert user.last_unmatched_active_at is not None
+    reminder = Reminder.objects.get(
+        target_type=Reminder.TARGET_USER,
+        target_id=user.id,
+        staff_id=owner.id,
+        remind_type=Reminder.TYPE_MANUAL,
+        status=Reminder.STATUS_PENDING,
+    )
+    assert reminder.remind_at == follow_up_time("2026-03-25T09:00:00Z")
+
+
+def test_patch_unmatched_followup_replaces_old_manual_reminder(
+    auth_client,
+    create_customer_profile,
+    create_follow_up,
+    create_staff,
+):
+    owner = create_staff(name="负责人U5M")
+    user = create_customer_profile(owner=owner)
+    follow_up = create_follow_up(
+        scene=FollowUpRecord.SCENE_UNMATCHED,
+        match_card=None,
+        user=user,
+        staff=owner,
+        content="首次未配对跟进",
+        is_still_contact=None,
+        risk_status=None,
+        next_remind_mode=None,
+        next_remind_at=None,
+    )
+
+    first_patch_response = auth_client(owner).patch(
+        f"/api/v1/follow-ups/{follow_up.id}/",
+        {
+            "next_remind_at": "2026-03-25T09:00:00Z",
+        },
+        format="json",
+    )
+    assert first_patch_response.status_code == 200
+    old_reminder = Reminder.objects.get(
+        target_type=Reminder.TARGET_USER,
+        target_id=user.id,
+        staff_id=owner.id,
+        remind_type=Reminder.TYPE_MANUAL,
+        status=Reminder.STATUS_PENDING,
+    )
+
+    second_patch_response = auth_client(owner).patch(
+        f"/api/v1/follow-ups/{follow_up.id}/",
+        {
+            "next_remind_at": "2026-03-28T09:00:00Z",
+        },
+        format="json",
+    )
+    assert second_patch_response.status_code == 200
+
+    old_reminder.refresh_from_db()
+    new_reminder = Reminder.objects.get(
+        target_type=Reminder.TARGET_USER,
+        target_id=user.id,
+        staff_id=owner.id,
+        remind_type=Reminder.TYPE_MANUAL,
+        status=Reminder.STATUS_PENDING,
+    )
+    pending_list_response = auth_client(owner).get("/api/v1/reminders/?status=pending&remind_type=manual")
+    assert old_reminder.status == Reminder.STATUS_EXPIRED
+    assert new_reminder.id != old_reminder.id
+    assert new_reminder.remind_at == follow_up_time("2026-03-28T09:00:00Z")
+    assert pending_list_response.status_code == 200
+    assert pending_list_response.data["count"] == 1
+    assert pending_list_response.data["results"][0]["id"] == new_reminder.id
 
 
 def test_non_side_staff_cannot_patch_followup(auth_client, create_follow_up, create_match_card, create_staff):

@@ -394,7 +394,7 @@ def _expire_manual_override_candidates(target_type, target_id, staff_id):
         target_type=target_type,
         target_id=target_id,
         staff_id=staff_id,
-        status=Reminder.STATUS_PENDING,
+        status__in=ACTIVE_REMINDER_STATUSES,
         is_manual=False,
     )
     updated = queryset.update(status=Reminder.STATUS_EXPIRED)
@@ -403,20 +403,35 @@ def _expire_manual_override_candidates(target_type, target_id, staff_id):
     return updated
 
 
-@transaction.atomic
-def create_manual_reminder(validated_data, actor):
-    target_type = validated_data["target_type"]
-    target_id = validated_data["target_id"]
-    remind_at = validated_data["remind_at"]
-    target = _get_target_for_create(target_type, target_id)
+def _expire_existing_manual_reminders(target_type, target_id, staff_id):
+    queryset = Reminder.objects.filter(
+        target_type=target_type,
+        target_id=target_id,
+        staff_id=staff_id,
+        status__in=ACTIVE_REMINDER_STATUSES,
+        is_manual=True,
+    )
+    updated = queryset.update(status=Reminder.STATUS_EXPIRED)
+    if target_type == Reminder.TARGET_MATCH_CARD:
+        refresh_match_card_next_remind_at(_get_match_card_target(target_id))
+    return updated
 
+
+def _resolve_manual_reminder_receiver(target_type, target, actor):
     if target_type == Reminder.TARGET_USER:
         _require_manual_user_reminder_permission(actor, target)
-        receiver = target.owner
-    else:
-        receiver = _resolve_manual_match_card_staff(actor, target)
+        return target.owner
+    return _resolve_manual_match_card_staff(actor, target)
+
+
+@transaction.atomic
+def create_manual_reminder_for_target(*, target_type, target_id, remind_at, actor):
+    target = _get_target_for_create(target_type, target_id)
+
+    receiver = _resolve_manual_reminder_receiver(target_type, target, actor)
 
     _expire_manual_override_candidates(target_type, target_id, receiver.id)
+    _expire_existing_manual_reminders(target_type, target_id, receiver.id)
     reminder = create_reminder(
         target_type=target_type,
         target_id=target_id,
@@ -424,6 +439,17 @@ def create_manual_reminder(validated_data, actor):
         remind_type=Reminder.TYPE_MANUAL,
         remind_at=remind_at,
         is_manual=True,
+    )
+    return reminder
+
+
+@transaction.atomic
+def create_manual_reminder(validated_data, actor):
+    reminder = create_manual_reminder_for_target(
+        target_type=validated_data["target_type"],
+        target_id=validated_data["target_id"],
+        remind_at=validated_data["remind_at"],
+        actor=actor,
     )
     return {
         "id": reminder.id,
