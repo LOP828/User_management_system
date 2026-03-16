@@ -131,6 +131,34 @@
   - 完成判定：
     - 当前服务层实现和测试均满足，视为完成
 
+- **`[high priority]` B3 — Reminder API 端点**
+  - 当前已实现：
+    - `GET /reminders/` 已完全切换到 persisted 单轨，基于 `build_persisted_reminder_queryset()`
+    - `POST /reminders/{id}/process/` 基于 persisted `Reminder.id` 调用服务层，完整支持权限检查与 `first_meet_overdue` 闭环
+    - `POST /reminders/manual/` 已实现，基于 `create_manual_reminder()`，旧提醒自动失效，配对卡 `next_remind_at` 自动刷新
+    - 三个端点均已注册到 `urls.py`
+    - 派生式 `build_reminder_list()` 已确认无调用方，已于阶段1整理时删除
+  - 测试现状：
+    - 已覆盖 persisted 列表权限过滤、matchmaker/admin 筛选、类型/状态/时间范围筛选
+    - 已覆盖 matched_revisit / success_revisit 出现在 persisted 列表
+    - 已覆盖 manual 创建、覆盖旧系统提醒、权限拒绝
+    - 已覆盖 process 权限检查、重复处理拒绝、first_meet_overdue 闭环
+    - 全量测试 186 条通过
+  - 完成判定：
+    - API 三端点均完整实现并有测试覆盖，与 `06_api_contract_v1_1_2.md §11` 对齐，视为完成
+
+- **`[normal]` C4 — Reminder 模块测试**
+  - 当前已实现：
+    - `tests/migrations/test_0004_reminder_core.py`：建表/字段/外键/索引/check constraint
+    - `tests/apps/reminder/test_reminder_model_contract.py`：模型默认值与枚举约束
+    - `tests/apps/reminder/test_reminder_service.py`：服务层持久化 query / create / process / expire / refresh
+    - `tests/apps/reminder/test_reminder_api.py`：GET 列表（12条）、POST manual（2条）、POST process（4条）
+    - 合计 reminder 相关测试 30+ 条，全部通过
+  - 当前缺口：
+    - `tasks.py` 仍是占位，缺 Celery task 单元测试（依赖后续 Celery 基础设施接入）
+  - 完成判定：
+    - 核心路径已覆盖，仅 Celery task 层待补，视为**接近完成**，不阻塞 B4 推进
+
 - **`[normal]` A6 — 统一 operation_log 字段模型**
   - 当前已实现：
     - `operation_log` 底层 canonical schema 明确保持为 `operator / action / target_type / target_id / before_json / after_json / reason / created_at`
@@ -153,48 +181,20 @@
 
 ---
 
-### 部分完成
-
-- **`[high priority]` B3 — Reminder API 端点**
-  - 当前已实现：
-    - Reminder 表已存在
-    - Reminder 服务层已具备持久化 query / create / process / expire 基础函数
-    - `GET /reminders/` 已存在
-    - 当前接口可按权限返回派生式 reminder 列表，并支持部分筛选
-    - `POST /reminders/{id}/process/` 已实现，并基于 persisted `Reminder.id` 调用 B2 service
-  - 当前缺口：
-    - 当前 API 仍是混合模式：
-      - `GET /reminders/` 继续走派生式列表
-      - `POST /reminders/{id}/process/` 只处理 persisted `Reminder.id`
-    - 尚未处理旧合成 reminder id 与 persisted `Reminder.id` 的兼容
-    - `POST /reminders/manual/` 未实现
-    - 与 `06_api_contract_v1_1_2.md` 中完整 reminder 生命周期仍不一致
-  - 完成判定：
-    - 在现有 `/process/` 基础上，补齐 manual 端点和列表模型化切换后完成
-
-- **`[normal]` C4 — Reminder 模块测试**
-  - 当前已实现：
-    - 已有 Reminder migration / model schema 基础测试
-    - 已有 reminder 列表相关测试
-    - 已有 Reminder 服务层持久化 query / create / process / expire 测试
-    - 已有 `/reminders/{id}/process/` API 测试
-    - 已覆盖派生 reminder 的权限过滤、逾期展示、manual follow-up 影响、筛选行为
-  - 当前缺口：
-    - 仍无 `/reminders/manual/` API 测试
-    - `tasks.py` 仍是占位，缺 Celery task 单元测试
-  - 完成判定：
-    - 依赖 B2、B3；补齐 reminder 持久化和 API 后扩展测试
-
----
-
 ### 未完成
 
-- **`[high priority]` B4 — Recommendation 模型与迁移**
-  - 文件：`apps/recommendation/models.py`
-  - 当前实际情况：
-    - 当前为空占位，迁移未落地
+- **`[high priority]` B4 — Recommendation 模型与迁移** ✅
+  - 当前已实现：
+    - `apps/recommendation/models.py`：`RecommendationBatch` + `RecommendationCandidate` 两张表
+    - `apps/recommendation/migrations/0001_initial.py`：建表 + 索引 + check constraint
+    - `RecommendationBatch`：`user_id / staff_id / batch_no(unique) / candidate_count / status / created_at / closed_at`；INDEX(user_id, created_at)、INDEX(staff_id)；status check constraint
+    - `RecommendationCandidate`：`batch_id / candidate_user_id / is_selected / is_met / result / created_at / updated_at`；INDEX(batch_id)、INDEX(candidate_user_id)；result check constraint
+    - `tests/migrations/test_0006_recommendation_core.py`：建表/字段/索引/约束合约测试
+    - `tests/apps/recommendation/test_recommendation_model_contract.py`：模型默认值、唯一约束、枚举约束
+    - 全量测试 201 条通过
+  - 注意：`last_unmatched_active_at` 更新（发起推荐时）属于服务层，在 B5 中实现
   - 完成判定：
-    - 创建 `RecommendationBatch` + `RecommendationCandidate` 两张表并通过迁移
+    - 模型、迁移、测试均满足，视为完成
 
 - **`[high priority]` B5 — Recommendation 服务与 API**
   - 文件：`apps/recommendation/services.py`、`views.py`、`serializers.py`、`urls.py`
@@ -267,11 +267,13 @@
 
 | 顺序 | 任务 | 原因 / 前置 |
 |------|------|-------------|
-| 1 | B3 | 在现有 B2 服务层基础上补齐 Reminder API 端点 |
-| 2 | B4, B6 | Recommendation / Transfer 先补模型 |
-| 3 | B5, B7 | Recommendation / Transfer 再补服务和 API |
-| 4 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
-| 5 | C2, C3, C4, C5 | 模块完成后集中补测试与文档对齐 |
+| 1 | ~~B3~~ ✅ | 已完成，三端点均落地并有测试 |
+| 2 | B4 ✅ | Recommendation 模型与迁移已落地（本轮完成） |
+| 3 | B5 | Recommendation 服务与 API，含 last_unmatched_active_at 联动 |
+| 4 | B6 | Transfer 模型与迁移 |
+| 5 | B7 | Transfer 服务与 API |
+| 6 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
+| 7 | C2, C3, ~~C4~~, C5 | 模块完成后集中补测试与文档对齐；C4 核心已完成 |
 
 ---
 
