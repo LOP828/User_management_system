@@ -5,6 +5,7 @@ from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
 
 from apps.common.exceptions import BusinessRuleError
+from apps.followup.services import get_match_card_side_valid_visit_counts
 from apps.matchcard.models import MatchCard
 from apps.matchcard.permissions import can_view_match_card
 from apps.oplog.services import create_operation_log
@@ -66,17 +67,26 @@ def _ensure_pending_application(application):
         )
 
 
-@transaction.atomic
-def create_success_application(validated_data, actor):
-    """BR-SUCCESS-001: 前置条件 stage=stable_contact，创建后推进到 success_pending_review。"""
-    match_card = validated_data["match_card"]
-    _require_applicant_permission(actor, match_card)
-
-    # BR-SUCCESS-001: 只能从 stable_contact 发起成功申请
+def _ensure_success_application_prerequisites(match_card):
     if match_card.stage != MatchCard.STAGE_STABLE_CONTACT:
         raise BusinessRuleError(
             "MATCH_STAGE_TRANSITION_INVALID",
             "当前阶段不允许发起成功申请，配对卡须处于稳定联系阶段",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    valid_visit_counts = get_match_card_side_valid_visit_counts(match_card)
+    if valid_visit_counts["male"] < 2 or valid_visit_counts["female"] < 2:
+        raise BusinessRuleError(
+            "MATCH_NOT_ENOUGH_VISITS",
+            "男女双方各至少需要 2 条有效回访",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not (match_card.staff_judgment or "").strip():
+        raise BusinessRuleError(
+            "MATCH_RELATIONSHIP_NOT_CONFIRMED",
+            "请先在配对卡填写红娘综合判断，确认双方恋爱关系",
             status.HTTP_400_BAD_REQUEST,
         )
 
@@ -87,6 +97,14 @@ def create_success_application(validated_data, actor):
             "配对卡存续时间不足30天",
             status.HTTP_400_BAD_REQUEST,
         )
+
+
+@transaction.atomic
+def create_success_application(validated_data, actor):
+    """BR-SUCCESS-001: 前置条件 stage=stable_contact，创建后推进到 success_pending_review。"""
+    match_card = validated_data["match_card"]
+    _require_applicant_permission(actor, match_card)
+    _ensure_success_application_prerequisites(match_card)
 
     if SuccessApplication.objects.filter(
         match_card=match_card,

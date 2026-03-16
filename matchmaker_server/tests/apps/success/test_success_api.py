@@ -15,6 +15,34 @@ from apps.user.models import CustomerProfile
 pytestmark = pytest.mark.django_db
 
 
+def seed_success_application_prerequisites(match_card, *, male_count=2, female_count=2, staff_judgment="主操作红娘确认双方已建立恋爱关系"):
+    for index in range(male_count):
+        FollowUpRecord.objects.create(
+            scene=FollowUpRecord.SCENE_MATCHED,
+            match_card=match_card,
+            user=match_card.male_user,
+            staff=match_card.male_staff,
+            content=f"男方有效回访{index + 1}",
+            is_still_contact=FollowUpRecord.CONTACT_YES,
+            risk_status=FollowUpRecord.RISK_NONE,
+            next_remind_mode=FollowUpRecord.REMIND_DEFAULT,
+        )
+    for index in range(female_count):
+        FollowUpRecord.objects.create(
+            scene=FollowUpRecord.SCENE_MATCHED,
+            match_card=match_card,
+            user=match_card.female_user,
+            staff=match_card.female_staff,
+            content=f"女方有效回访{index + 1}",
+            is_still_contact=FollowUpRecord.CONTACT_YES,
+            risk_status=FollowUpRecord.RISK_NONE,
+            next_remind_mode=FollowUpRecord.REMIND_DEFAULT,
+        )
+    if staff_judgment is not None:
+        match_card.staff_judgment = staff_judgment
+        match_card.save(update_fields=["staff_judgment", "updated_at"])
+
+
 @pytest.fixture
 def create_match_card(create_customer_profile, create_staff):
     def factory(**kwargs):
@@ -121,6 +149,7 @@ def test_primary_staff_can_create_success_application(auth_client, create_match_
     card = create_match_card(primary_staff=primary_staff, male_staff=primary_staff)
     MatchCard.objects.filter(pk=card.pk).update(created_at=timezone.now() - timedelta(days=31))
     card.refresh_from_db()
+    seed_success_application_prerequisites(card)
 
     response = auth_client(primary_staff).post(
         "/api/v1/success-applications/",
@@ -144,6 +173,7 @@ def test_success_application_transitions_card_to_success_pending_review(auth_cli
     assert card.stage == MatchCard.STAGE_STABLE_CONTACT
     MatchCard.objects.filter(pk=card.pk).update(created_at=timezone.now() - timedelta(days=31))
     card.refresh_from_db()
+    seed_success_application_prerequisites(card)
 
     response = auth_client(primary_staff).post(
         "/api/v1/success-applications/",
@@ -175,6 +205,7 @@ def test_success_application_requires_stable_contact_stage(auth_client, create_m
 def test_success_application_requires_duration(auth_client, create_match_card, create_staff):
     primary_staff = create_staff(name="主操作红娘C")
     card = create_match_card(primary_staff=primary_staff, male_staff=primary_staff)
+    seed_success_application_prerequisites(card)
 
     response = auth_client(primary_staff).post(
         "/api/v1/success-applications/",
@@ -186,11 +217,46 @@ def test_success_application_requires_duration(auth_client, create_match_card, c
     assert response.data["code"] == "MATCH_DURATION_TOO_SHORT"
 
 
+def test_success_application_requires_two_valid_visits_per_side(auth_client, create_match_card, create_staff):
+    primary_staff = create_staff(name="主操作红娘C1")
+    card = create_match_card(primary_staff=primary_staff, male_staff=primary_staff)
+    MatchCard.objects.filter(pk=card.pk).update(created_at=timezone.now() - timedelta(days=31))
+    card.refresh_from_db()
+    seed_success_application_prerequisites(card, male_count=1, female_count=2)
+
+    response = auth_client(primary_staff).post(
+        "/api/v1/success-applications/",
+        {"match_card_id": card.id},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.data["code"] == "MATCH_NOT_ENOUGH_VISITS"
+
+
+def test_success_application_requires_relationship_confirmation(auth_client, create_match_card, create_staff):
+    primary_staff = create_staff(name="主操作红娘C2")
+    card = create_match_card(primary_staff=primary_staff, male_staff=primary_staff)
+    MatchCard.objects.filter(pk=card.pk).update(created_at=timezone.now() - timedelta(days=31))
+    card.refresh_from_db()
+    seed_success_application_prerequisites(card, staff_judgment=None)
+
+    response = auth_client(primary_staff).post(
+        "/api/v1/success-applications/",
+        {"match_card_id": card.id},
+        format="json",
+    )
+
+    assert response.status_code == 400
+    assert response.data["code"] == "MATCH_RELATIONSHIP_NOT_CONFIRMED"
+
+
 def test_success_application_blocks_duplicate_pending(auth_client, create_match_card, create_success_application, create_staff):
     primary_staff = create_staff(name="主操作红娘D")
     card = create_match_card(primary_staff=primary_staff, male_staff=primary_staff)
     MatchCard.objects.filter(pk=card.pk).update(created_at=timezone.now() - timedelta(days=31))
     card.refresh_from_db()
+    seed_success_application_prerequisites(card)
     create_success_application(match_card=card, applicant=primary_staff)
 
     # fixture 已将 stage 推到 success_pending_review，回退到 stable_contact 以通过阶段检查，
@@ -269,6 +335,7 @@ def test_admin_can_reject_success_application_and_reapply(auth_client, admin_sta
     card = create_match_card(primary_staff=primary_staff, male_staff=primary_staff)
     MatchCard.objects.filter(pk=card.pk).update(created_at=timezone.now() - timedelta(days=31))
     card.refresh_from_db()
+    seed_success_application_prerequisites(card)
     application = create_success_application(match_card=card, applicant=primary_staff)
 
     reject_response = auth_client(admin_staff).post(

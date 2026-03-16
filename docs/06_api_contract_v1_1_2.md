@@ -77,6 +77,7 @@ Token 过期返回 401，客户端用 refresh_token 刷新。
 | USER_STATUS_TRANSITION_INVALID | 400 | 状态流转不合法 |
 | MATCH_STAGE_TRANSITION_INVALID | 400 | 配对卡阶段流转不合法 |
 | MATCH_NOT_ENOUGH_VISITS | 400 | 有效回访次数不足 |
+| MATCH_RELATIONSHIP_NOT_CONFIRMED | 400 | 未确认双方恋爱关系 |
 | MATCH_DURATION_TOO_SHORT | 400 | 配对卡存续时间不足30天 |
 | RECOMMEND_LIMIT_EXCEEDED | 400 | 超出推荐候选上限 |
 | TRANSFER_PENDING_EXISTS | 400 | 已有待审批的转移申请 |
@@ -1085,6 +1086,7 @@ POST /api/v1/success-applications/
 **关联规则：** BR-SUCCESS-001
 
 **说明：** 该接口是配对卡从 `stable_contact` 进入 `success_pending_review` 的唯一入口
+调用前需已通过 `PATCH /api/v1/match-cards/{id}/` 填写 `staff_judgment`，作为“双方确认恋爱关系”的系统落点。
 
 **请求体：**
 ```json
@@ -1107,7 +1109,7 @@ POST /api/v1/success-applications/
 }
 ```
 
-**失败响应（400）：** MATCH_STAGE_TRANSITION_INVALID / MATCH_NOT_ENOUGH_VISITS / MATCH_DURATION_TOO_SHORT / SUCCESS_PENDING_EXISTS。
+**失败响应（400）：** MATCH_STAGE_TRANSITION_INVALID / MATCH_NOT_ENOUGH_VISITS / MATCH_RELATIONSHIP_NOT_CONFIRMED / MATCH_DURATION_TOO_SHORT / SUCCESS_PENDING_EXISTS。
 
 ---
 

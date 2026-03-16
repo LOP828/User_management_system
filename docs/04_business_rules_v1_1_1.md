@@ -744,6 +744,9 @@ for user in 未配对池中非暂停、非met_not_continue的用户:
 5. 操作人 = primary_staff_id 或 角色为 admin
 6. 不存在 status = 'pending' 的未处理申请
 
+**说明：**
+- 当前系统以 `match_card.staff_judgment` 非空作为“双方确认恋爱关系”的落库标记；该字段由主操作红娘或管理员通过 PATCH `/match-cards/{id}/` 独立更新。
+
 ---
 
 ### BR-SUCCESS-002：审核通过联动

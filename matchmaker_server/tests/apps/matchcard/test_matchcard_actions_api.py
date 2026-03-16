@@ -282,6 +282,8 @@ def test_success_pending_review_still_enters_via_success_application(
     )
     MatchCard.objects.filter(pk=card.pk).update(created_at=timezone.now() - timedelta(days=31))
     card.refresh_from_db()
+    card.staff_judgment = "主操作红娘确认双方已建立恋爱关系"
+    card.save(update_fields=["staff_judgment", "updated_at"])
 
     for content, user, staff in [
         ("男方第一次有效回访", card.male_user, primary_staff),
