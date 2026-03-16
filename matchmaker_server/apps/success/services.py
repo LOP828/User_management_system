@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
@@ -9,6 +11,8 @@ from apps.followup.services import get_match_card_side_valid_visit_counts
 from apps.matchcard.models import MatchCard
 from apps.matchcard.permissions import can_view_match_card
 from apps.oplog.services import create_operation_log
+from apps.reminder.models import Reminder
+from apps.reminder.services import create_reminder, expire_target_reminders
 from apps.staff.models import Staff
 from apps.success.models import SuccessApplication, SuccessCase
 
@@ -99,6 +103,17 @@ def _ensure_success_application_prerequisites(match_card):
         )
 
 
+def _create_success_revisit_reminders(match_card, approved_at):
+    for days in (30, 90, 180):
+        create_reminder(
+            target_type=Reminder.TARGET_MATCH_CARD,
+            target_id=match_card.id,
+            staff=match_card.primary_staff,
+            remind_type=Reminder.TYPE_SUCCESS_REVISIT,
+            remind_at=approved_at + timedelta(days=days),
+        )
+
+
 @transaction.atomic
 def create_success_application(validated_data, actor):
     """BR-SUCCESS-001: 前置条件 stage=stable_contact，创建后推进到 success_pending_review。"""
@@ -167,6 +182,7 @@ def approve_success_application(application, actor):
     match_card.stage = MatchCard.STAGE_SUCCESS
     match_card.next_remind_at = None
     match_card.save(update_fields=["stage", "next_remind_at", "updated_at"])
+    _create_success_revisit_reminders(match_card, now)
 
     match_card.male_user.is_in_match = False
     match_card.male_user.save(update_fields=["is_in_match", "updated_at"])
@@ -277,6 +293,11 @@ def invalidate_success_case(success_case, actor, reason_id, reason_note=None):
     match_card.ended_at = now
     match_card.next_remind_at = None
     match_card.save(update_fields=["stage", "ended_at", "next_remind_at", "updated_at"])
+    expire_target_reminders(
+        Reminder.TARGET_MATCH_CARD,
+        match_card.id,
+        remind_types=[Reminder.TYPE_SUCCESS_REVISIT],
+    )
 
     match_card.male_user.is_in_match = False
     match_card.male_user.save(update_fields=["is_in_match", "updated_at"])

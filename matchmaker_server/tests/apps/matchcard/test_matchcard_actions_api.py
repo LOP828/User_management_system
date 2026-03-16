@@ -7,6 +7,8 @@ from django.utils import timezone
 from apps.config_mgmt.models import ReasonEnum
 from apps.followup.models import FollowUpRecord
 from apps.matchcard.models import MatchCard
+from apps.reminder.models import Reminder
+from apps.reminder.services import create_reminder
 from apps.user.models import CustomerProfile
 
 
@@ -431,3 +433,48 @@ def test_end_reflows_users_and_appends_emotional_history(auth_client, create_mat
     assert "待重新推荐" in (card.female_user.tags or [])
     assert len(card.male_user.emotional_history or []) == 1
     assert len(card.female_user.emotional_history or []) == 1
+
+
+def test_end_expires_active_match_card_reminders(auth_client, create_match_card, create_staff):
+    primary_staff = create_staff(name="主操作红娘I1")
+    card = create_match_card(primary_staff=primary_staff, stage=MatchCard.STAGE_STABLE_CONTACT)
+    active_success_revisit = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff=primary_staff,
+        remind_type=Reminder.TYPE_SUCCESS_REVISIT,
+        remind_at=timezone.now() + timedelta(days=30),
+    )
+    active_manual = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff=primary_staff,
+        remind_type=Reminder.TYPE_MANUAL,
+        remind_at=timezone.now() + timedelta(days=5),
+        is_manual=True,
+    )
+    processed_reminder = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff=primary_staff,
+        remind_type=Reminder.TYPE_MATCHED_REVISIT,
+        remind_at=timezone.now() + timedelta(days=60),
+        status_value=Reminder.STATUS_PROCESSED,
+    )
+
+    response = auth_client(primary_staff).post(
+        f"/api/v1/match-cards/{card.id}/end/",
+        {"end_reason_staff": "关系终止，关闭提醒"},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    card.refresh_from_db()
+    active_success_revisit.refresh_from_db()
+    active_manual.refresh_from_db()
+    processed_reminder.refresh_from_db()
+    assert card.stage == MatchCard.STAGE_ENDED
+    assert card.next_remind_at is None
+    assert active_success_revisit.status == Reminder.STATUS_EXPIRED
+    assert active_manual.status == Reminder.STATUS_EXPIRED
+    assert processed_reminder.status == Reminder.STATUS_PROCESSED

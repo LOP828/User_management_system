@@ -8,6 +8,8 @@ from apps.config_mgmt.models import ReasonEnum
 from apps.followup.models import FollowUpRecord
 from apps.matchcard.models import MatchCard
 from apps.oplog.models import OperationLog
+from apps.reminder.models import Reminder
+from apps.reminder.services import create_reminder
 from apps.success.models import SuccessApplication, SuccessCase
 from apps.user.models import CustomerProfile
 
@@ -294,12 +296,27 @@ def test_admin_can_approve_success_application(auth_client, admin_staff, create_
     card.male_user.refresh_from_db()
     card.female_user.refresh_from_db()
     success_case = SuccessCase.objects.get(application=application)
+    success_revisit_reminders = list(
+        Reminder.objects.filter(
+            target_type=Reminder.TARGET_MATCH_CARD,
+            target_id=card.id,
+            remind_type=Reminder.TYPE_SUCCESS_REVISIT,
+        ).order_by("remind_at", "id")
+    )
     assert application.status == SuccessApplication.STATUS_APPROVED
     assert card.stage == MatchCard.STAGE_SUCCESS
     assert success_case.status == SuccessCase.STATUS_ACTIVE
     assert card.male_user.is_in_match is False
     assert card.female_user.is_in_match is False
-    assert card.next_remind_at is None
+    assert len(success_revisit_reminders) == 3
+    assert [reminder.staff_id for reminder in success_revisit_reminders] == [primary_staff.id, primary_staff.id, primary_staff.id]
+    assert [reminder.status for reminder in success_revisit_reminders] == [Reminder.STATUS_PENDING, Reminder.STATUS_PENDING, Reminder.STATUS_PENDING]
+    assert [reminder.remind_at for reminder in success_revisit_reminders] == [
+        success_case.approved_at + timedelta(days=30),
+        success_case.approved_at + timedelta(days=90),
+        success_case.approved_at + timedelta(days=180),
+    ]
+    assert card.next_remind_at == success_revisit_reminders[0].remind_at
 
 
 def test_matchmaker_cannot_approve_success_application(auth_client, create_success_application, create_staff):
@@ -492,6 +509,21 @@ def test_primary_staff_can_invalidate_success_case_and_write_operation_log(
     )
     male_pool_status = card.male_user.pool_status
     female_pool_status = card.female_user.pool_status
+    pending_reminder = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff=primary_staff,
+        remind_type=Reminder.TYPE_SUCCESS_REVISIT,
+        remind_at=timezone.now() + timedelta(days=30),
+    )
+    sent_reminder = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff=primary_staff,
+        remind_type=Reminder.TYPE_SUCCESS_REVISIT,
+        remind_at=timezone.now() + timedelta(days=90),
+        status_value=Reminder.STATUS_SENT,
+    )
 
     response = auth_client(primary_staff).post(
         f"/api/v1/success-cases/{success_case.id}/invalidate/",
@@ -510,6 +542,8 @@ def test_primary_staff_can_invalidate_success_case_and_write_operation_log(
     card.refresh_from_db()
     card.male_user.refresh_from_db()
     card.female_user.refresh_from_db()
+    pending_reminder.refresh_from_db()
+    sent_reminder.refresh_from_db()
     oplog = OperationLog.objects.get(
         action="success_invalidated",
         target_type="success_case",
@@ -523,6 +557,8 @@ def test_primary_staff_can_invalidate_success_case_and_write_operation_log(
     assert card.stage == MatchCard.STAGE_ENDED
     assert card.ended_at is not None
     assert card.next_remind_at is None
+    assert pending_reminder.status == Reminder.STATUS_EXPIRED
+    assert sent_reminder.status == Reminder.STATUS_EXPIRED
     assert card.male_user.is_in_match is False
     assert card.female_user.is_in_match is False
     assert card.male_user.pool_status == male_pool_status

@@ -11,6 +11,8 @@ from apps.followup.services import get_match_card_side_valid_visit_counts
 from apps.matchcard.models import MatchCard
 from apps.matchcard.permissions import MATCHCARD_EDITABLE_FIELDS, can_view_match_card, get_allowed_update_fields
 from apps.oplog.services import create_operation_log
+from apps.reminder.models import Reminder
+from apps.reminder.services import expire_target_reminders
 from apps.staff.models import Staff
 from apps.user.models import CustomerProfile
 
@@ -373,6 +375,7 @@ def end_match_card(match_card, actor, end_reason_male=None, end_reason_female=No
             "updated_at",
         ]
     )
+    expire_target_reminders(Reminder.TARGET_MATCH_CARD, match_card.id)
 
     reflowed_users = []
     for user, partner_name in (
