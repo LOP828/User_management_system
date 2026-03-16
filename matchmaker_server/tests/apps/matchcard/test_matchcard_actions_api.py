@@ -112,26 +112,22 @@ def test_advance_stage_allows_initial_to_stable_with_one_valid_visit_per_side(au
         female_staff=female_staff,
         stage=MatchCard.STAGE_INITIAL_CONTACT,
     )
-    FollowUpRecord.objects.create(
-        scene=FollowUpRecord.SCENE_MATCHED,
-        match_card=card,
-        user=card.male_user,
-        staff=primary_staff,
-        content="男方第一次有效回访",
-        is_still_contact=FollowUpRecord.CONTACT_YES,
-        risk_status=FollowUpRecord.RISK_NONE,
-        next_remind_mode=FollowUpRecord.REMIND_DEFAULT,
-    )
-    FollowUpRecord.objects.create(
-        scene=FollowUpRecord.SCENE_MATCHED,
-        match_card=card,
-        user=card.female_user,
-        staff=female_staff,
-        content="女方第一次有效回访",
-        is_still_contact=FollowUpRecord.CONTACT_YES,
-        risk_status=FollowUpRecord.RISK_NONE,
-        next_remind_mode=FollowUpRecord.REMIND_DEFAULT,
-    )
+    for content, user, staff in [
+        ("男方第一次有效回访", card.male_user, primary_staff),
+        ("男方第二次有效回访", card.male_user, primary_staff),
+        ("女方第一次有效回访", card.female_user, female_staff),
+        ("女方第二次有效回访", card.female_user, female_staff),
+    ]:
+        FollowUpRecord.objects.create(
+            scene=FollowUpRecord.SCENE_MATCHED,
+            match_card=card,
+            user=user,
+            staff=staff,
+            content=content,
+            is_still_contact=FollowUpRecord.CONTACT_YES,
+            risk_status=FollowUpRecord.RISK_NONE,
+            next_remind_mode=FollowUpRecord.REMIND_DEFAULT,
+        )
 
     response = auth_client(primary_staff).post(
         f"/api/v1/match-cards/{card.id}/advance-stage/",
@@ -186,7 +182,7 @@ def test_advance_stage_does_not_count_invalid_followups_for_initial_to_stable(au
     assert response.data["code"] == "MATCH_NOT_ENOUGH_VISITS"
 
 
-def test_advance_stage_requires_duration_for_stable_to_success_pending(auth_client, create_match_card, create_staff):
+def test_advance_stage_blocks_direct_success_pending_review_entry(auth_client, create_match_card, create_staff):
     primary_staff = create_staff(name="主操作红娘D")
     card = create_match_card(primary_staff=primary_staff, stage=MatchCard.STAGE_STABLE_CONTACT)
 
@@ -197,10 +193,12 @@ def test_advance_stage_requires_duration_for_stable_to_success_pending(auth_clie
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.data["code"] == "MATCH_DURATION_TOO_SHORT"
+    assert response.data["code"] == "MATCH_STAGE_TRANSITION_INVALID"
+    card.refresh_from_db()
+    assert card.stage == MatchCard.STAGE_STABLE_CONTACT
 
 
-def test_advance_stage_requires_two_valid_visits_per_side_for_stable_to_success_pending(
+def test_advance_stage_still_blocks_direct_success_pending_review_entry_even_with_duration_and_visits(
     auth_client,
     create_match_card,
     create_staff,
@@ -244,10 +242,32 @@ def test_advance_stage_requires_two_valid_visits_per_side_for_stable_to_success_
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.data["code"] == "MATCH_NOT_ENOUGH_VISITS"
+    assert response.data["code"] == "MATCH_STAGE_TRANSITION_INVALID"
+    card.refresh_from_db()
+    assert card.stage == MatchCard.STAGE_STABLE_CONTACT
 
 
-def test_advance_stage_allows_stable_to_success_pending_with_real_valid_visits_and_duration(
+def test_advance_stage_cannot_handle_success_pending_review_exit(auth_client, create_match_card, create_staff):
+    primary_staff = create_staff(name="主操作红娘D2")
+    card = create_match_card(
+        primary_staff=primary_staff,
+        male_staff=primary_staff,
+        stage=MatchCard.STAGE_SUCCESS_PENDING_REVIEW,
+    )
+
+    response = auth_client(primary_staff).post(
+        f"/api/v1/match-cards/{card.id}/advance-stage/",
+        {"to_stage": MatchCard.STAGE_STABLE_CONTACT, "reason": "尝试通用驳回"},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.data["code"] == "MATCH_STAGE_TRANSITION_INVALID"
+    card.refresh_from_db()
+    assert card.stage == MatchCard.STAGE_SUCCESS_PENDING_REVIEW
+
+
+def test_success_pending_review_still_enters_via_success_application(
     auth_client,
     create_match_card,
     create_staff,
@@ -281,13 +301,13 @@ def test_advance_stage_allows_stable_to_success_pending_with_real_valid_visits_a
         )
 
     response = auth_client(primary_staff).post(
-        f"/api/v1/match-cards/{card.id}/advance-stage/",
-        {"to_stage": MatchCard.STAGE_SUCCESS_PENDING_REVIEW, "reason": "满足回访与时长条件"},
+        "/api/v1/success-applications/",
+        {"match_card_id": card.id, "apply_note": "满足成功申请前置条件"},
         format="json",
     )
 
-    assert response.status_code == status.HTTP_200_OK
-    assert response.data["stage"] == MatchCard.STAGE_SUCCESS_PENDING_REVIEW
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.data["status"] == "pending"
     card.refresh_from_db()
     assert card.stage == MatchCard.STAGE_SUCCESS_PENDING_REVIEW
 

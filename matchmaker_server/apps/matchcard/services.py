@@ -29,8 +29,8 @@ RISK_DISPLAY_MAP = {
 }
 ALLOWED_STAGE_TRANSITIONS = {
     MatchCard.STAGE_INITIAL_CONTACT: {MatchCard.STAGE_STABLE_CONTACT, MatchCard.STAGE_ENDED},
-    MatchCard.STAGE_STABLE_CONTACT: {MatchCard.STAGE_SUCCESS_PENDING_REVIEW, MatchCard.STAGE_ENDED},
-    MatchCard.STAGE_SUCCESS_PENDING_REVIEW: {MatchCard.STAGE_SUCCESS, MatchCard.STAGE_STABLE_CONTACT},
+    MatchCard.STAGE_STABLE_CONTACT: {MatchCard.STAGE_ENDED},
+    MatchCard.STAGE_SUCCESS_PENDING_REVIEW: set(),
     MatchCard.STAGE_SUCCESS: {MatchCard.STAGE_ENDED},
     MatchCard.STAGE_ENDED: set(),
 }
@@ -206,6 +206,20 @@ def advance_match_card_stage(match_card, actor, to_stage, reason=""):
             status.HTTP_400_BAD_REQUEST,
         )
 
+    if to_stage == MatchCard.STAGE_SUCCESS_PENDING_REVIEW:
+        raise BusinessRuleError(
+            "MATCH_STAGE_TRANSITION_INVALID",
+            "成功待审核只能通过发起成功申请进入",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    if match_card.stage == MatchCard.STAGE_SUCCESS_PENDING_REVIEW:
+        raise BusinessRuleError(
+            "MATCH_STAGE_TRANSITION_INVALID",
+            "成功待审核阶段请通过成功申请审批流程处理",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
     if to_stage not in ALLOWED_STAGE_TRANSITIONS.get(match_card.stage, set()):
         raise BusinessRuleError(
             "MATCH_STAGE_TRANSITION_INVALID",
@@ -228,30 +242,6 @@ def advance_match_card_stage(match_card, actor, to_stage, reason=""):
                 "有效回访次数不足",
                 status.HTTP_400_BAD_REQUEST,
             )
-
-    if match_card.stage == MatchCard.STAGE_STABLE_CONTACT and to_stage == MatchCard.STAGE_SUCCESS_PENDING_REVIEW:
-        age_days = (timezone.now() - match_card.created_at).days
-        if age_days < 30:
-            raise BusinessRuleError(
-                "MATCH_DURATION_TOO_SHORT",
-                "配对卡存续时间不足30天",
-                status.HTTP_400_BAD_REQUEST,
-            )
-        if valid_visit_counts["male"] < 2 or valid_visit_counts["female"] < 2:
-            raise BusinessRuleError(
-                "MATCH_NOT_ENOUGH_VISITS",
-                "有效回访次数不足",
-                status.HTTP_400_BAD_REQUEST,
-            )
-
-    if match_card.stage == MatchCard.STAGE_SUCCESS_PENDING_REVIEW and to_stage == MatchCard.STAGE_SUCCESS:
-        if actor.role != Staff.ROLE_ADMIN:
-            raise PermissionDenied("无权限")
-        raise BusinessRuleError(
-            "MATCH_STAGE_TRANSITION_INVALID",
-            "成功通过需在成功申请审批流程中处理",
-            status.HTTP_400_BAD_REQUEST,
-        )
 
     before_json = {"stage": match_card.stage}
     match_card.stage = to_stage
