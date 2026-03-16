@@ -145,15 +145,18 @@
 
 ### 未完成
 
-- **`[blocker]` Celery 定时任务 — Reminder 自动生成**
-  - 依赖 Celery + Redis/RabbitMQ 基础设施
-  - `apps/reminder/tasks.py` 当前仍为占位文件
-  - 未自动生成的 reminder 类型：
-    - followup_timeout（未配对跟进超时）
-    - first_meet_pending / first_meet_delayed / first_meet_warning / first_meet_overdue（首见提醒系列）
-    - pause_revisit（暂停回访）
-  - 已自动生成的：matched_revisit（配对卡推进时创建）、success_revisit（成功申请时创建）、manual（手动创建）
-  - 注：process_reminder() 中 first_meet_overdue 的处理逻辑（写 followup + 更新 last_action_at）已实现；自动生成该类型的定时任务尚未实现
+- **`[blocker]` Celery 定时任务 — Reminder 自动生成**（部分完成）
+  - Celery 基础设施（config/celery.py、CELERY_BROKER_URL）已接好；`tasks.py` 已有真实 task
+  - **已实现（service 层 + task 包装）：**
+    - `followup_timeout`（BR-REMIND-009）：`scan_followup_timeout_reminders()` + `@shared_task`
+    - `first_meet_pending/delayed/warning/overdue/normal`（BR-REMIND-001）：`scan_first_meet_reminders()` + `@shared_task`
+    - 幂等逻辑：followup_timeout 按当日去重；first_meet 按 active 提醒去重
+    - 测试覆盖：20 条，含边界/幂等/跳过条件，全部通过
+  - **仍未实现：**
+    - `pause_revisit`（BR-REMIND-002）：阻塞——user 表无 `paused_at` 字段，BR-REMIND-002 "用户进入暂停的时间"无法直接取得
+    - Celery Beat 调度配置（CELERY_BEAT_SCHEDULE）：任务函数已就绪，需配置定时计划
+    - 微信消息实际发送（BR-REMIND-007）：依赖企业微信基础设施
+  - 已自动生成的完整列表：matched_revisit（配对卡推进时）、success_revisit（成功申请时）、manual（手动创建）、followup_timeout、first_meet_* 系列
 
 - **`[normal]` GET /recommendations/candidate-search/（BR-REC-004）**
   - 文档 §6.5 已定义，但代码中 recommendation/urls.py 未注册此端点
@@ -190,7 +193,7 @@
 
 ### 当前全量测试状态
 
-- 全量测试：**295 条**，全部通过（2026-03-16）
+- 全量测试：**315 条**，全部通过（2026-03-16）
 - 分布：user/matchcard/followup/success/reminder/recommendation/transfer/oplog/dashboard/search/migration/model contract
 
 ---

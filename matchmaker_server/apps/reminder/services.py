@@ -573,3 +573,141 @@ def expire_target_reminders(target_type, target_id, remind_types=None):
     if target_type == Reminder.TARGET_MATCH_CARD:
         refresh_match_card_next_remind_at(_get_match_card_target(target_id))
     return updated
+
+
+# ---------------------------------------------------------------------------
+# 定时任务扫描：未配对跟进超时提醒（BR-REMIND-009）
+# ---------------------------------------------------------------------------
+
+_FOLLOWUP_TIMEOUT_EXCLUDED_STATUSES = [
+    CustomerProfile.STATUS_PAUSED,
+    CustomerProfile.STATUS_MET_NOT_CONTINUE,
+]
+
+
+def scan_followup_timeout_reminders():
+    """
+    BR-REMIND-009：每日扫描未配对用户跟进超时，创建 followup_timeout 提醒。
+
+    触发对象：is_in_match=False，非暂停、非已见面未继续，deleted_at 为空。
+    幂等：同一用户当日已有 followup_timeout 提醒（任意状态）则跳过。
+    返回：本次新创建的提醒条数。
+    """
+    now = timezone.now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    eligible_users = (
+        CustomerProfile.objects.filter(
+            is_in_match=False,
+            deleted_at__isnull=True,
+        )
+        .exclude(pool_status__in=_FOLLOWUP_TIMEOUT_EXCLUDED_STATUSES)
+        .select_related("payment_level", "owner")
+    )
+
+    created_count = 0
+    for user in eligible_users:
+        timeout_days = user.payment_level.followup_timeout_days
+        baseline = user.last_unmatched_active_at or user.created_at
+        if (now - baseline).days < timeout_days:
+            continue
+
+        # 幂等：当日已存在该用户的 followup_timeout 提醒则跳过
+        already_today = Reminder.objects.filter(
+            target_type=Reminder.TARGET_USER,
+            target_id=user.id,
+            remind_type=Reminder.TYPE_FOLLOWUP_TIMEOUT,
+            created_at__gte=today_start,
+        ).exists()
+        if already_today:
+            continue
+
+        Reminder.objects.create(
+            target_type=Reminder.TARGET_USER,
+            target_id=user.id,
+            staff=user.owner,
+            remind_type=Reminder.TYPE_FOLLOWUP_TIMEOUT,
+            remind_at=now,
+            status=Reminder.STATUS_PENDING,
+            is_manual=False,
+        )
+        created_count += 1
+
+    return created_count
+
+
+# ---------------------------------------------------------------------------
+# 定时任务扫描：未首见进度提醒（BR-REMIND-001）
+# ---------------------------------------------------------------------------
+
+# 按 days_since_paid 升序，与业务规则 elif 链对应（高优先级先匹配）
+_FIRST_MEET_THRESHOLDS = [
+    (5, Reminder.TYPE_FIRST_MEET_OVERDUE),
+    (4, Reminder.TYPE_FIRST_MEET_WARNING),
+    (3, Reminder.TYPE_FIRST_MEET_DELAYED),
+    (2, Reminder.TYPE_FIRST_MEET_PENDING),
+    (1, Reminder.TYPE_NORMAL),
+]
+
+_FIRST_MEET_EXCLUDED_STATUSES = [
+    CustomerProfile.STATUS_PAUSED,
+    CustomerProfile.STATUS_MET_NOT_CONTINUE,
+]
+
+
+def scan_first_meet_reminders():
+    """
+    BR-REMIND-001：每日扫描未首见用户，按 paid_at 天数创建进度提醒。
+
+    触发对象：paid_at IS NOT NULL，is_in_match=False，非暂停、非已见面未继续，deleted_at 为空。
+    幂等：该类型已有 active（pending/sent）提醒则跳过。
+    返回：本次新创建的提醒条数。
+    """
+    now = timezone.now()
+
+    eligible_users = (
+        CustomerProfile.objects.filter(
+            is_in_match=False,
+            paid_at__isnull=False,
+            deleted_at__isnull=True,
+        )
+        .exclude(pool_status__in=_FIRST_MEET_EXCLUDED_STATUSES)
+        .select_related("owner")
+    )
+
+    created_count = 0
+    for user in eligible_users:
+        days_since_paid = (now - user.paid_at).days
+
+        # 找到应生成的 remind_type（高阈值优先）
+        target_remind_type = None
+        for min_days, remind_type in _FIRST_MEET_THRESHOLDS:
+            if days_since_paid >= min_days:
+                target_remind_type = remind_type
+                break
+
+        if target_remind_type is None:
+            continue
+
+        # 幂等：已有该类型的 active 提醒则跳过
+        already_active = Reminder.objects.filter(
+            target_type=Reminder.TARGET_USER,
+            target_id=user.id,
+            remind_type=target_remind_type,
+            status__in=list(ACTIVE_REMINDER_STATUSES),
+        ).exists()
+        if already_active:
+            continue
+
+        Reminder.objects.create(
+            target_type=Reminder.TARGET_USER,
+            target_id=user.id,
+            staff=user.owner,
+            remind_type=target_remind_type,
+            remind_at=now,
+            status=Reminder.STATUS_PENDING,
+            is_manual=False,
+        )
+        created_count += 1
+
+    return created_count
