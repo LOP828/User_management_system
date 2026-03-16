@@ -147,6 +147,31 @@
   - 完成判定：
     - API 三端点均完整实现并有测试覆盖，与 `06_api_contract_v1_1_2.md §11` 对齐，视为完成
 
+- **`[high priority]` B4 — Recommendation 模型与迁移**
+  - 当前已实现：
+    - `apps/recommendation/models.py`：`RecommendationBatch` + `RecommendationCandidate` 两张表
+    - `apps/recommendation/migrations/0001_initial.py`：建表 + 索引 + check constraint
+    - `RecommendationBatch`：`user_id / staff_id / batch_no(unique) / candidate_count / status / created_at / closed_at`；INDEX(user_id, created_at)、INDEX(staff_id)；status check constraint
+    - `RecommendationCandidate`：`batch_id / candidate_user_id / is_selected / is_met / result / created_at / updated_at`；INDEX(batch_id)、INDEX(candidate_user_id)；result check constraint
+    - `tests/migrations/test_0006_recommendation_core.py`：建表/字段/索引/约束合约测试
+    - `tests/apps/recommendation/test_recommendation_model_contract.py`：模型默认值、唯一约束、枚举约束
+  - 完成判定：
+    - 模型、迁移、测试均满足，视为完成
+
+- **`[high priority]` B5 — Recommendation 服务与 API**
+  - 当前已实现：
+    - `apps/recommendation/services.py`：`create_recommendation_batch()` / `select_candidate()` / `close_recommendation_batch()`
+    - BR-REC-001（状态+资料完整性校验）、BR-REC-002（候选人数量限制）、BR-REC-003（重复候选人警告）、BR-REC-005（关闭无选中回退状态）、BR-REC-006（更新 last_action_at）、Addendum §3（更新 last_unmatched_active_at）
+    - `apps/recommendation/serializers.py`：`RecommendationBatchSerializer` / `RecommendationCandidateSerializer` / `RecommendationBatchCreateSerializer`
+    - `apps/recommendation/views.py`：`RecommendationBatchListCreateView` / `CandidateSelectView` / `BatchCloseView`
+    - `apps/recommendation/urls.py`：三端点路由，已注册在 `config/urls.py`
+    - `tests/apps/recommendation/test_recommendation_api.py`：17条 API 测试，覆盖权限、BR-REC-001/002/003/005/006、批次列表过滤
+    - 全量测试 218 条通过
+  - 权限模型：matchmaker 只能管理自己负责用户的批次（user.owner_id == actor.id）；admin 全局访问
+  - 批次号格式：`REC-YYYYMMDD-NNN`（当日顺序递增）
+  - 完成判定：
+    - 主链（创建→候选人→确认→关闭）完整走通，API 契约与文档一致，视为完成
+
 - **`[normal]` C4 — Reminder 模块测试**
   - 当前已实现：
     - `tests/migrations/test_0004_reminder_core.py`：建表/字段/外键/索引/check constraint
@@ -182,26 +207,6 @@
 ---
 
 ### 未完成
-
-- **`[high priority]` B4 — Recommendation 模型与迁移** ✅
-  - 当前已实现：
-    - `apps/recommendation/models.py`：`RecommendationBatch` + `RecommendationCandidate` 两张表
-    - `apps/recommendation/migrations/0001_initial.py`：建表 + 索引 + check constraint
-    - `RecommendationBatch`：`user_id / staff_id / batch_no(unique) / candidate_count / status / created_at / closed_at`；INDEX(user_id, created_at)、INDEX(staff_id)；status check constraint
-    - `RecommendationCandidate`：`batch_id / candidate_user_id / is_selected / is_met / result / created_at / updated_at`；INDEX(batch_id)、INDEX(candidate_user_id)；result check constraint
-    - `tests/migrations/test_0006_recommendation_core.py`：建表/字段/索引/约束合约测试
-    - `tests/apps/recommendation/test_recommendation_model_contract.py`：模型默认值、唯一约束、枚举约束
-    - 全量测试 201 条通过
-  - 注意：`last_unmatched_active_at` 更新（发起推荐时）属于服务层，在 B5 中实现
-  - 完成判定：
-    - 模型、迁移、测试均满足，视为完成
-
-- **`[high priority]` B5 — Recommendation 服务与 API**
-  - 文件：`apps/recommendation/services.py`、`views.py`、`serializers.py`、`urls.py`
-  - 当前实际情况：
-    - 相关文件仍为空占位或空路由
-  - 完成判定：
-    - 推荐批次生命周期（创建→添加候选人→确认）完整可走通，API 契约一致
 
 - **`[high priority]` B6 — Transfer 模型与迁移**
   - 文件：`apps/transfer/models.py`
@@ -240,12 +245,8 @@
   - 完成判定：
     - 搜索结果包含用户基础信息 + 所属红娘，权限过滤正确
 
-- **`[high priority]` C2 — Recommendation 模块测试**
-  - 文件：`tests/test_recommendation.py`
-  - 当前实际情况：
-    - 模块本体尚未落地，对应测试未开始
-  - 完成判定：
-    - 推荐模块核心路径 ≥10 条测试，覆盖权限边界
+- **`[high priority]` C2 — Recommendation 模块测试** ✅（已随 B5 完成）
+  - `tests/apps/recommendation/test_recommendation_api.py`：17条，覆盖权限边界与所有 BR-REC 规则
 
 - **`[high priority]` C3 — Transfer 模块测试**
   - 文件：`tests/test_transfer.py`
@@ -268,12 +269,12 @@
 | 顺序 | 任务 | 原因 / 前置 |
 |------|------|-------------|
 | 1 | ~~B3~~ ✅ | 已完成，三端点均落地并有测试 |
-| 2 | B4 ✅ | Recommendation 模型与迁移已落地（本轮完成） |
-| 3 | B5 | Recommendation 服务与 API，含 last_unmatched_active_at 联动 |
+| 2 | ~~B4~~ ✅ | Recommendation 模型与迁移已落地 |
+| 3 | ~~B5~~ ✅ | Recommendation 服务与 API，含 last_unmatched_active_at 联动 |
 | 4 | B6 | Transfer 模型与迁移 |
 | 5 | B7 | Transfer 服务与 API |
 | 6 | B8, B9, B10 | 收尾型接口，优先级低于核心业务链路 |
-| 7 | C2, C3, ~~C4~~, C5 | 模块完成后集中补测试与文档对齐；C4 核心已完成 |
+| 7 | ~~C2~~ ✅, C3, ~~C4~~, C5 | 模块完成后集中补测试与文档对齐；C2/C4 核心已完成 |
 
 ---
 
