@@ -348,17 +348,22 @@ WHERE rb.user_id = {当前用户ID}
 
 ### BR-MATCH-002：主阶段流转合法性
 
+**适用范围：** 仅适用于通用阶段推进操作（`POST /match-cards/{id}/advance-stage/`）
+
 **合法流转路径（白名单）：**
 
 | 当前阶段 | 允许变更为 |
 |---------|-----------|
 | initial_contact | stable_contact, ended |
-| stable_contact | success_pending_review, ended |
-| success_pending_review | success, stable_contact（驳回） |
+| stable_contact | ended |
+| success_pending_review | —（仅可通过成功申请审批专用流程离开） |
 | success | ended（失效处理） |
 | ended | —（终态，不可变更） |
 
-**不在白名单内的变更一律拦截。** 管理员强制修改不受此限制。
+**补充说明：**
+- `stable_contact → success_pending_review` 不属于通用阶段推进白名单；该流转只能通过 BR-SUCCESS-001 的“发起成功申请”进入
+- `success_pending_review → success / stable_contact` 不属于通用阶段推进白名单；该阶段只能通过 BR-SUCCESS-002 / BR-SUCCESS-003 的专用审批流程离开
+- 不在白名单内的变更一律拦截。管理员强制修改不受此限制。
 
 ---
 
@@ -368,18 +373,10 @@ WHERE rb.user_id = {当前用户ID}
 - 男方侧：至少 1 条单方有效回访（由 male_staff_id 对应的红娘提交）
 - 女方侧：至少 1 条单方有效回访（由 female_staff_id 对应的红娘提交）
 
-#### stable_contact → success_pending_review
-- 男方侧：至少 2 条单方有效回访
-- 女方侧：至少 2 条单方有效回访
-- 配对卡存续时间 ≥ 30 天（created_at 距今 ≥ 30天）
-
-#### success_pending_review → success
-- 操作人角色必须为 admin
-- 关联的 success_application.status 必须为 pending
-
 **说明：**
 - 系统按 follow_up_record.user_id 区分男方侧/女方侧并分别计数，一条记录不能同时计入双方侧。
 - 若双方红娘为同一人，仍需分别针对男方、女方各提交一条跟进记录。
+- `stable_contact → success_pending_review` 的前置条件改由 BR-SUCCESS-001 定义；`success_pending_review → success / stable_contact` 的离开条件改由 BR-SUCCESS-002 / BR-SUCCESS-003 定义。
 
 ### BR-MATCH-004：风险标记规则
 
@@ -741,9 +738,11 @@ for user in 未配对池中非暂停、非met_not_continue的用户:
 
 **校验：**
 1. 配对卡 stage = 'stable_contact'
-2. 配对卡存续时间 ≥ 30 天
-3. 操作人 = primary_staff_id 或 角色为 admin
-4. 不存在 status = 'pending' 的未处理申请
+2. 男方侧和女方侧各至少 2 条单方有效回访
+3. 双方确认恋爱关系
+4. 配对卡存续时间 ≥ 30 天
+5. 操作人 = primary_staff_id 或 角色为 admin
+6. 不存在 status = 'pending' 的未处理申请
 
 ---
 

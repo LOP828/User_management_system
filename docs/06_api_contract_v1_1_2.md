@@ -830,6 +830,11 @@ POST /api/v1/match-cards/{id}/advance-stage/
 **权限：** primary_staff 或 admin
 **关联规则：** BR-MATCH-002, BR-MATCH-003
 
+**说明：**
+- 该接口仅用于通用阶段推进
+- `success_pending_review` 不能作为 `to_stage`
+- 当配对卡已处于 `success_pending_review` 时，不能通过该接口离开；进入该阶段请使用 `POST /success-applications/`，离开该阶段请使用成功申请审批接口
+
 **请求体：**
 ```json
 {
@@ -1079,6 +1084,8 @@ POST /api/v1/success-applications/
 **权限：** primary_staff 或 admin
 **关联规则：** BR-SUCCESS-001
 
+**说明：** 该接口是配对卡从 `stable_contact` 进入 `success_pending_review` 的唯一入口
+
 **请求体：**
 ```json
 {
@@ -1100,7 +1107,7 @@ POST /api/v1/success-applications/
 }
 ```
 
-**失败响应（400）：** MATCH_DURATION_TOO_SHORT / SUCCESS_PENDING_EXISTS。
+**失败响应（400）：** MATCH_STAGE_TRANSITION_INVALID / MATCH_NOT_ENOUGH_VISITS / MATCH_DURATION_TOO_SHORT / SUCCESS_PENDING_EXISTS。
 
 ---
 
@@ -1128,6 +1135,8 @@ POST /api/v1/success-applications/{id}/approve/
 **权限：** admin
 **关联规则：** BR-SUCCESS-002
 
+**说明：** 该接口是配对卡从 `success_pending_review` 进入 `success` 的唯一出口
+
 **成功响应（200）：**
 ```json
 {
@@ -1149,6 +1158,8 @@ POST /api/v1/success-applications/{id}/reject/
 
 **权限：** admin
 **关联规则：** BR-SUCCESS-003
+
+**说明：** 该接口是配对卡从 `success_pending_review` 回退到 `stable_contact` 的唯一出口
 
 **请求体：**
 ```json
