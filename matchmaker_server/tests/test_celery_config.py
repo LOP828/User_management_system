@@ -41,6 +41,17 @@ def test_first_meet_task_registered():
     assert isinstance(entry["schedule"], crontab), "schedule 类型应为 crontab"
 
 
+def test_notify_due_reminders_task_registered():
+    """notify due reminders 定时任务已注册"""
+    schedule = settings.CELERY_BEAT_SCHEDULE
+    assert "notify-send-due-reminders" in schedule, \
+        "缺少 notify-send-due-reminders 调度项"
+    entry = schedule["notify-send-due-reminders"]
+    assert entry["task"] == "notify.send_due_reminders", \
+        "task 名称与 @shared_task(name=...) 不匹配"
+    assert isinstance(entry["schedule"], crontab), "schedule 类型应为 crontab"
+
+
 def test_celery_timezone_matches_django():
     """Celery 时区与 Django TIME_ZONE 一致"""
     assert settings.CELERY_TIMEZONE == settings.TIME_ZONE, \
@@ -61,16 +72,20 @@ def test_celery_serializer_is_json():
 
 def test_task_names_importable():
     """tasks.py 中的 task 函数可正常导入，name 属性与 schedule 配置一致"""
+    from apps.notify.tasks import send_due_reminders  # noqa: PLC0415
     from apps.reminder.tasks import scan_first_meet, scan_followup_timeout  # noqa: PLC0415
 
     assert scan_followup_timeout.name == "reminder.scan_followup_timeout"
     assert scan_first_meet.name == "reminder.scan_first_meet"
+    assert send_due_reminders.name == "notify.send_due_reminders"
 
 
 def test_beat_schedule_task_names_match_task_objects():
     """CELERY_BEAT_SCHEDULE 中的 task 字符串与实际 task.name 完全吻合"""
+    from apps.notify.tasks import send_due_reminders  # noqa: PLC0415
     from apps.reminder.tasks import scan_first_meet, scan_followup_timeout  # noqa: PLC0415
 
     schedule = settings.CELERY_BEAT_SCHEDULE
     assert schedule["reminder-scan-followup-timeout"]["task"] == scan_followup_timeout.name
     assert schedule["reminder-scan-first-meet"]["task"] == scan_first_meet.name
+    assert schedule["notify-send-due-reminders"]["task"] == send_due_reminders.name

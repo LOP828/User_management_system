@@ -519,7 +519,7 @@ def test_admin_can_change_owner_id_with_force(
     assert all(item["staff_id"] == new_owner.id for item in new_owner_reminders.data["results"])
 
     oplog = OperationLog.objects.filter(target_type="user", target_id=user.id).latest("id")
-    assert oplog.action == "admin_force_change"
+    assert oplog.action == "user_owner_changed"
     assert oplog.before_json["owner_id"] == old_owner.id
     assert oplog.after_json["owner_id"] == new_owner.id
     assert oplog.reason == "管理员调整负责人"
@@ -716,3 +716,177 @@ def test_matchmaker_cannot_change_owner_id(
     assert response.status_code == status.HTTP_403_FORBIDDEN
     user.refresh_from_db()
     assert user.owner_id == matchmaker_staff.id
+
+
+# ---------------------------------------------------------------------------
+# update_customer_profile update_fields 精确更新测试
+# ---------------------------------------------------------------------------
+
+
+def test_patch_single_field_does_not_overwrite_other_fields(
+    auth_client,
+    matchmaker_staff,
+    create_customer_profile,
+):
+    """只 PATCH name，其他字段（city/phone/basic_requirement/paid_at）应保持不变。"""
+    user = create_customer_profile(
+        phone="13900139300",
+        city="成都",
+        basic_requirement="找成都本地",
+        paid_at=timezone.now() - timedelta(days=3),
+    )
+    original_city = user.city
+    original_phone = user.phone
+    original_basic_req = user.basic_requirement
+    original_paid_at = user.paid_at
+
+    response = auth_client(matchmaker_staff).patch(
+        f"/api/v1/users/{user.id}/",
+        {"name": "新名字"},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    user.refresh_from_db()
+    assert user.name == "新名字"
+    assert user.city == original_city
+    assert user.phone == original_phone
+    assert user.basic_requirement == original_basic_req
+    assert user.paid_at == original_paid_at
+
+
+def test_patch_does_not_overwrite_pool_status_changed_by_another_flow(
+    auth_client,
+    matchmaker_staff,
+    create_customer_profile,
+):
+    """
+    模拟并发风险：先通过状态接口改 pool_status，再 PATCH 资料字段，
+    验证 pool_status 不被旧实例覆盖回原值。
+    """
+    user = create_customer_profile(
+        phone="13900139301",
+        pool_status=CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
+    )
+
+    # 模拟另一个流程先把 pool_status 推进到 recommended_pending_select
+    CustomerProfile.objects.filter(id=user.id).update(
+        pool_status=CustomerProfile.STATUS_RECOMMENDED_PENDING_SELECT,
+    )
+
+    # 此时 PATCH 资料字段（用创建时拿到的 instance，pool_status 还是旧值）
+    response = auth_client(matchmaker_staff).patch(
+        f"/api/v1/users/{user.id}/",
+        {"city": "上海"},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    user.refresh_from_db()
+    assert user.city == "上海"
+    # 关键断言：pool_status 应保持为另一个流程写入的新值
+    assert user.pool_status == CustomerProfile.STATUS_RECOMMENDED_PENDING_SELECT
+
+
+def test_patch_does_not_overwrite_is_in_match_changed_by_another_flow(
+    auth_client,
+    matchmaker_staff,
+    create_customer_profile,
+):
+    """PATCH 资料不应覆盖 is_in_match（由建卡流程维护）。"""
+    user = create_customer_profile(phone="13900139302", is_in_match=False)
+
+    # 模拟建卡流程把 is_in_match 设为 True
+    CustomerProfile.objects.filter(id=user.id).update(is_in_match=True)
+
+    response = auth_client(matchmaker_staff).patch(
+        f"/api/v1/users/{user.id}/",
+        {"age": 30},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    user.refresh_from_db()
+    assert user.age == 30
+    assert user.is_in_match is True
+
+
+def test_patch_does_not_overwrite_last_action_at_when_owner_unchanged(
+    auth_client,
+    matchmaker_staff,
+    create_customer_profile,
+):
+    """非 owner 变更的 PATCH 不应更新 last_action_at。"""
+    past = timezone.now() - timedelta(days=10)
+    user = create_customer_profile(phone="13900139303", last_action_at=past)
+
+    response = auth_client(matchmaker_staff).patch(
+        f"/api/v1/users/{user.id}/",
+        {"city": "北京"},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    user.refresh_from_db()
+    assert user.city == "北京"
+    # last_action_at 不应被改动
+    assert user.last_action_at == past
+
+
+def test_admin_change_owner_updates_last_action_at(
+    auth_client,
+    admin_staff,
+    create_staff,
+    create_customer_profile,
+):
+    """owner 变更时 last_action_at 应被更新。"""
+    past = timezone.now() - timedelta(days=10)
+    old_owner = create_staff(phone="13800138301", name="旧红娘X")
+    new_owner = create_staff(phone="13800138302", name="新红娘X")
+    user = create_customer_profile(
+        phone="13900139304",
+        owner=old_owner,
+        last_action_at=past,
+    )
+
+    before_patch = timezone.now()
+    response = auth_client(admin_staff).patch(
+        f"/api/v1/users/{user.id}/",
+        {
+            "owner_id": new_owner.id,
+            "force": True,
+            "force_reason": "测试 owner 变更时间戳",
+        },
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    user.refresh_from_db()
+    assert user.owner_id == new_owner.id
+    assert user.last_action_at >= before_patch
+
+
+def test_patch_does_not_overwrite_tags_or_last_unmatched_active_at(
+    auth_client,
+    matchmaker_staff,
+    create_customer_profile,
+):
+    """PATCH 资料不应覆盖 tags 和 last_unmatched_active_at（由其他流程维护）。"""
+    past = timezone.now() - timedelta(days=5)
+    user = create_customer_profile(
+        phone="13900139305",
+        tags=["待重新推荐"],
+        last_unmatched_active_at=past,
+    )
+
+    response = auth_client(matchmaker_staff).patch(
+        f"/api/v1/users/{user.id}/",
+        {"name": "改名测试"},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    user.refresh_from_db()
+    assert user.name == "改名测试"
+    assert user.tags == ["待重新推荐"]
+    assert user.last_unmatched_active_at == past

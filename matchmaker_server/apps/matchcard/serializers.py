@@ -18,6 +18,13 @@ class MatchCardBaseSerializer(serializers.ModelSerializer):
     female_staff_name = serializers.CharField(source="female_staff.name", read_only=True)
     primary_staff_id = serializers.IntegerField(source="primary_staff.id", read_only=True)
     primary_staff_name = serializers.CharField(source="primary_staff.name", read_only=True)
+    candidate_id = serializers.IntegerField(source="recommendation_candidate.id", read_only=True, allow_null=True)
+    candidate_user_id = serializers.IntegerField(
+        source="recommendation_candidate.candidate_user.id", read_only=True, allow_null=True
+    )
+    candidate_user_name = serializers.CharField(
+        source="recommendation_candidate.candidate_user.name", read_only=True, allow_null=True
+    )
     stage_display = serializers.SerializerMethodField()
     risk_level_display = serializers.SerializerMethodField()
     risk_reason = serializers.SerializerMethodField()
@@ -36,6 +43,9 @@ class MatchCardBaseSerializer(serializers.ModelSerializer):
             "female_staff_name",
             "primary_staff_id",
             "primary_staff_name",
+            "candidate_id",
+            "candidate_user_id",
+            "candidate_user_name",
             "stage",
             "stage_display",
             "risk_level",
@@ -102,7 +112,7 @@ class MatchCardCreateSerializer(serializers.Serializer):
         source="female_user",
         queryset=CustomerProfile.objects.filter(deleted_at__isnull=True),
     )
-    candidate_id = serializers.IntegerField(required=False, allow_null=True)
+    candidate_id = serializers.IntegerField(required=True)
 
 
 class MatchCardUpdateSerializer(serializers.Serializer):

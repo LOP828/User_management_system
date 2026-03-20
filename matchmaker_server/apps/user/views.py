@@ -16,6 +16,7 @@ from apps.user.serializers import (
     UserStatusChangeRequestSerializer,
 )
 from apps.user.services import (
+    annotate_priority_score,
     build_user_list_queryset,
     change_user_status,
     pause_user,
@@ -29,7 +30,7 @@ class UserListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated]
     filterset_class = CustomerProfileFilterSet
     search_fields = ("name", "phone", "wechat")
-    ordering_fields = ("created_at",)
+    ordering_fields = ("created_at", "priority_score")
     ordering = ("-created_at",)
 
     def get_queryset(self):
@@ -39,6 +40,7 @@ class UserListCreateView(generics.ListCreateAPIView):
             .order_by("-created_at", "-id")
         )
         queryset = build_user_list_queryset(self.request.user, queryset)
+        queryset = annotate_priority_score(queryset)
         if self.request.user.role != "admin":
             return queryset.filter(is_in_match=False)
 

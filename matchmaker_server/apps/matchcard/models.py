@@ -2,6 +2,7 @@ from django.conf import settings
 from django.db import models
 
 from apps.config_mgmt.models import ReasonEnum
+from apps.recommendation.models import RecommendationCandidate
 from apps.user.models import CustomerProfile
 
 
@@ -59,6 +60,14 @@ class MatchCard(models.Model):
         related_name="primary_match_cards",
         db_column="primary_staff_id",
     )
+    recommendation_candidate = models.ForeignKey(
+        RecommendationCandidate,
+        on_delete=models.PROTECT,
+        related_name="match_cards",
+        db_column="recommendation_candidate_id",
+        null=True,
+        blank=True,
+    )
     stage = models.CharField(max_length=30, choices=STAGE_CHOICES, default=STAGE_INITIAL_CONTACT)
     risk_level = models.CharField(max_length=20, choices=RISK_LEVEL_CHOICES, default=RISK_NONE)
     risk_reason = models.ForeignKey(
@@ -92,6 +101,9 @@ class MatchCard(models.Model):
             models.Index(fields=["male_staff"], name="match_card_male_staff_idx"),
             models.Index(fields=["female_staff"], name="match_card_female_staff_idx"),
             models.Index(fields=["primary_staff"], name="match_card_primary_staff_idx"),
+            models.Index(
+                fields=["recommendation_candidate"], name="match_card_rec_cand_idx"
+            ),
             models.Index(fields=["stage"], name="match_card_stage_idx"),
             models.Index(fields=["risk_level"], name="match_card_risk_level_idx"),
             models.Index(fields=["next_remind_at"], name="match_card_next_remind_idx"),

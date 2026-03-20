@@ -1,4 +1,5 @@
 import pytest
+from django.utils import timezone
 from uuid import uuid4
 
 from apps.matchcard.models import MatchCard
@@ -28,13 +29,13 @@ def _user(create_customer_profile, owner, status=CustomerProfile.STATUS_COMMUNIC
     )
 
 
-def _match_card(male_user, female_user, male_staff, female_staff, stage=MatchCard.STAGE_INITIAL_CONTACT):
+def _match_card(male_user, female_user, male_staff, female_staff, stage=MatchCard.STAGE_INITIAL_CONTACT, primary_staff=None):
     return MatchCard.objects.create(
         male_user=male_user,
         female_user=female_user,
         male_staff=male_staff,
         female_staff=female_staff,
-        primary_staff=male_staff,
+        primary_staff=primary_staff or male_staff,
         stage=stage,
         risk_level=MatchCard.RISK_NONE,
     )
@@ -107,10 +108,12 @@ def test_matchmaker_dashboard_response_structure(auth_client, matchmaker_staff):
     assert "match_cards" in data
     assert "reminders" in data
     up = data["user_pool"]
+    assert "new_pending" in up
     assert "communicated_pending_recommend" in up
     assert "recommended_pending_select" in up
     assert "selected_pending_meet" in up
     assert "met_not_continue" in up
+    assert "paused" in up
     mc = data["match_cards"]
     assert "active" in mc
     assert "success_pending_review" in mc
@@ -213,6 +216,9 @@ def test_admin_dashboard_response_structure(auth_client, admin_staff):
     pa = data["pending_approvals"]
     assert "transfer_count" in pa
     assert "success_count" in pa
+    up = data["user_pool"]
+    assert "new_pending" in up
+    assert "paused" in up
 
 
 # ---------------------------------------------------------------------------
@@ -249,3 +255,75 @@ def test_admin_user_pool_counts_all_users(
 
     resp = auth_client(admin_staff).get(ADMIN_URL)
     assert resp.json()["user_pool"]["communicated_pending_recommend"] >= 2
+
+
+def test_admin_user_pool_excludes_matched_and_deleted(
+    auth_client, admin_staff, matchmaker_staff, create_customer_profile
+):
+    _user(
+        create_customer_profile,
+        matchmaker_staff,
+        CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
+        is_in_match=False,
+    )
+    _user(
+        create_customer_profile,
+        matchmaker_staff,
+        CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
+        is_in_match=True,
+    )
+    _user(
+        create_customer_profile,
+        matchmaker_staff,
+        CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
+        deleted_at=timezone.now(),
+    )
+
+    resp = auth_client(admin_staff).get(ADMIN_URL)
+    assert resp.json()["user_pool"]["communicated_pending_recommend"] == 1
+def test_matchmaker_match_card_counts_primary_staff(
+    auth_client, matchmaker_staff, create_customer_profile, create_staff
+):
+    """primary_staff 也应被纳入 active 统计。"""
+    other_male = create_staff(name="其他男方")
+    other_female = create_staff(name="其他女方")
+    male, female = _make_pair(create_customer_profile, other_male, other_female)
+    _match_card(
+        male,
+        female,
+        male_staff=other_male,
+        female_staff=other_female,
+        stage=MatchCard.STAGE_INITIAL_CONTACT,
+        primary_staff=matchmaker_staff,
+    )
+
+    resp = auth_client(matchmaker_staff).get(MATCHMAKER_URL)
+    assert resp.json()["match_cards"]["active"] == 1
+
+
+def test_matchmaker_user_pool_excludes_matched_and_deleted(
+    auth_client, matchmaker_staff, create_customer_profile
+):
+    _user(
+        create_customer_profile,
+        matchmaker_staff,
+        CustomerProfile.STATUS_NEW_PENDING,
+        is_in_match=False,
+    )
+    _user(
+        create_customer_profile,
+        matchmaker_staff,
+        CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
+        is_in_match=True,
+    )
+    _user(
+        create_customer_profile,
+        matchmaker_staff,
+        CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
+        deleted_at=timezone.now(),
+    )
+
+    resp = auth_client(matchmaker_staff).get(MATCHMAKER_URL)
+    up = resp.json()["user_pool"]
+    assert up["new_pending"] == 1
+    assert up["communicated_pending_recommend"] == 0

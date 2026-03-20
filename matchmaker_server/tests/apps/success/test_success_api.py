@@ -276,6 +276,115 @@ def test_success_application_blocks_duplicate_pending(auth_client, create_match_
     assert response.data["code"] == "SUCCESS_PENDING_EXISTS"
 
 
+def test_approve_expires_obsolete_match_stage_reminders(
+    auth_client, admin_staff, create_match_card, create_success_application, create_staff
+):
+    """BR-SUCCESS-002：成功申请通过后，旧 match 阶段 active reminder 须被 expire。
+
+    若不清理，refresh_match_card_next_remind_at 会把旧的 matched_revisit 时间
+    错误地写入 next_remind_at，导致它早于 success_revisit 提醒的到期时间。
+    旧 manual reminder 也属于同一问题：进入 success 后不应继续作为可处理待办残留。
+    """
+    primary_staff = create_staff(name="主操作红娘approve_expire")
+    card = create_match_card(primary_staff=primary_staff, male_staff=primary_staff)
+    application = create_success_application(match_card=card, applicant=primary_staff)
+    other_card = create_match_card()
+
+    # 模拟配对进行期间由有效回访生成的 matched_revisit 提醒
+    pending_matched = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff=primary_staff,
+        remind_type=Reminder.TYPE_MATCHED_REVISIT,
+        remind_at=timezone.now() + timedelta(days=7),
+    )
+    sent_matched = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff=primary_staff,
+        remind_type=Reminder.TYPE_MATCHED_REVISIT,
+        remind_at=timezone.now() + timedelta(days=3),
+        status_value=Reminder.STATUS_SENT,
+    )
+    # 已处理的提醒不应被影响
+    processed_matched = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff=primary_staff,
+        remind_type=Reminder.TYPE_MATCHED_REVISIT,
+        remind_at=timezone.now() - timedelta(days=7),
+        status_value=Reminder.STATUS_PROCESSED,
+    )
+    pending_manual = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff=primary_staff,
+        remind_type=Reminder.TYPE_MANUAL,
+        remind_at=timezone.now() + timedelta(days=2),
+        is_manual=True,
+    )
+    sent_manual = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=card.id,
+        staff=primary_staff,
+        remind_type=Reminder.TYPE_MANUAL,
+        remind_at=timezone.now() + timedelta(days=1),
+        status_value=Reminder.STATUS_SENT,
+        is_manual=True,
+    )
+    unrelated_manual = create_reminder(
+        target_type=Reminder.TARGET_MATCH_CARD,
+        target_id=other_card.id,
+        staff=other_card.primary_staff,
+        remind_type=Reminder.TYPE_MANUAL,
+        remind_at=timezone.now() + timedelta(days=4),
+        is_manual=True,
+    )
+
+    response = auth_client(admin_staff).post(
+        f"/api/v1/success-applications/{application.id}/approve/",
+        {},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    pending_matched.refresh_from_db()
+    sent_matched.refresh_from_db()
+    processed_matched.refresh_from_db()
+    pending_manual.refresh_from_db()
+    sent_manual.refresh_from_db()
+    unrelated_manual.refresh_from_db()
+    assert pending_matched.status == Reminder.STATUS_EXPIRED
+    assert sent_matched.status == Reminder.STATUS_EXPIRED
+    assert processed_matched.status == Reminder.STATUS_PROCESSED  # 已处理不受影响
+    assert pending_manual.status == Reminder.STATUS_EXPIRED
+    assert sent_manual.status == Reminder.STATUS_EXPIRED
+    assert unrelated_manual.status == Reminder.STATUS_PENDING
+
+    # next_remind_at 必须指向第一条 success_revisit，而非被清理的旧 matched/manual reminder
+    card.refresh_from_db()
+    first_success_revisit = (
+        Reminder.objects.filter(
+            target_type=Reminder.TARGET_MATCH_CARD,
+            target_id=card.id,
+            remind_type=Reminder.TYPE_SUCCESS_REVISIT,
+        )
+        .order_by("remind_at")
+        .first()
+    )
+    assert first_success_revisit is not None
+    assert card.next_remind_at == first_success_revisit.remind_at
+
+    # 旧 manual reminder 已失效，不允许再处理
+    process_response = auth_client(primary_staff).post(
+        f"/api/v1/reminders/{pending_manual.id}/process/",
+        {},
+        format="json",
+    )
+    assert process_response.status_code == 400
+    assert process_response.data["code"] == "REMINDER_STATUS_TRANSITION_INVALID"
+
+
 def test_admin_can_approve_success_application(auth_client, admin_staff, create_match_card, create_success_application, create_staff):
     primary_staff = create_staff(name="主操作红娘E")
     card = create_match_card(primary_staff=primary_staff, male_staff=primary_staff)

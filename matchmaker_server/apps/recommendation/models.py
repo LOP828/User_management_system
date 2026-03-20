@@ -83,4 +83,9 @@ class RecommendationCandidate(models.Model):
                 condition=models.Q(result__isnull=True) | models.Q(result__in=["continue", "not_continue", "pending"]),
                 name="rec_candidate_result_valid",
             ),
+            models.UniqueConstraint(
+                fields=["batch"],
+                condition=models.Q(is_selected=True),
+                name="rec_batch_single_selected_candidate",
+            ),
         ]

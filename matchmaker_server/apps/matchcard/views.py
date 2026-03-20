@@ -38,6 +38,8 @@ class MatchCardListCreateView(generics.ListCreateAPIView):
                 "female_staff",
                 "primary_staff",
                 "risk_reason",
+                "recommendation_candidate",
+                "recommendation_candidate__candidate_user",
             )
             .all()
             .order_by("-created_at", "-id")
@@ -96,6 +98,8 @@ class MatchCardDetailView(generics.RetrieveUpdateAPIView):
         "female_staff",
         "primary_staff",
         "risk_reason",
+        "recommendation_candidate",
+        "recommendation_candidate__candidate_user",
     ).all()
 
     def get_object(self):

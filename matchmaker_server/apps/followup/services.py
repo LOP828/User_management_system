@@ -7,6 +7,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from apps.common.exceptions import BusinessRuleError
 from apps.followup.models import FollowUpRecord
 from apps.matchcard.models import MatchCard
+from apps.oplog.services import ACTION_FOLLOW_UP_CREATED, ACTION_FOLLOW_UP_UPDATED, create_operation_log
 from apps.reminder.models import Reminder
 from apps.reminder.services import create_manual_reminder_for_target, sync_match_card_revisit_reminders
 from apps.staff.models import Staff
@@ -21,10 +22,12 @@ UNMATCHED_REQUIRED_FIELDS = (
     "user",
     "content",
 )
-SUPPORTED_MATCHED_CARD_STAGES = {
+ALLOWED_MATCHED_FOLLOWUP_STAGES = {
     MatchCard.STAGE_INITIAL_CONTACT,
     MatchCard.STAGE_STABLE_CONTACT,
-    MatchCard.STAGE_SUCCESS_PENDING_REVIEW,
+}
+ALLOWED_SUCCESS_FOLLOWUP_STAGES = {
+    MatchCard.STAGE_SUCCESS,
 }
 MATCHED_REQUIRED_FIELDS = (
     "match_card",
@@ -222,7 +225,7 @@ def validate_followup_scene_payload(data, instance=None):
         if next_remind_mode == FollowUpRecord.REMIND_DEFAULT and next_remind_at is not None:
             raise ValidationError({"next_remind_at": ["next_remind_mode=default 时 next_remind_at 必须为空。"]})
 
-        if match_card.stage not in SUPPORTED_MATCHED_CARD_STAGES:
+        if match_card.stage not in ALLOWED_MATCHED_FOLLOWUP_STAGES:
             raise BusinessRuleError(
                 "MATCH_STAGE_TRANSITION_INVALID",
                 "当前配对卡阶段不支持保存 matched 回访",
@@ -244,7 +247,7 @@ def validate_followup_scene_payload(data, instance=None):
         raise ValidationError({"next_remind_at": ["next_remind_mode=manual 时必须填写 next_remind_at。"]})
     if next_remind_mode == FollowUpRecord.REMIND_DEFAULT and next_remind_at is not None:
         raise ValidationError({"next_remind_at": ["next_remind_mode=default 时 next_remind_at 必须为空。"]})
-    if match_card.stage != MatchCard.STAGE_SUCCESS:
+    if match_card.stage not in ALLOWED_SUCCESS_FOLLOWUP_STAGES:
         raise BusinessRuleError(
             "MATCH_STAGE_TRANSITION_INVALID",
             "当前配对卡阶段不支持保存 success_followup 跟进",
@@ -336,6 +339,17 @@ def create_follow_up(validated_data, actor):
     if scene == FollowUpRecord.SCENE_MATCHED and is_valid_follow_up_record(follow_up):
         _refresh_match_card_last_visit_at(match_card)
         sync_match_card_revisit_reminders(match_card)
+    create_operation_log(
+        operator=actor,
+        action=ACTION_FOLLOW_UP_CREATED,
+        target_type="follow_up",
+        target_id=follow_up.id,
+        after_json={
+            "scene": follow_up.scene,
+            "match_card_id": follow_up.match_card_id,
+            "user_id": follow_up.user_id,
+        },
+    )
     return follow_up
 
 
@@ -371,6 +385,16 @@ def update_follow_up(instance, validated_data, actor):
     if instance.scene == FollowUpRecord.SCENE_MATCHED and is_valid_follow_up_record(instance):
         _refresh_match_card_last_visit_at(instance.match_card)
         sync_match_card_revisit_reminders(instance.match_card)
+    create_operation_log(
+        operator=actor,
+        action=ACTION_FOLLOW_UP_UPDATED,
+        target_type="follow_up",
+        target_id=instance.id,
+        after_json={
+            "scene": instance.scene,
+            "is_still_contact": instance.is_still_contact,
+        },
+    )
     return instance
 
 

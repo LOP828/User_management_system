@@ -218,6 +218,48 @@ def test_create_followup_default_mode_updates_match_card_next_remind_at(auth_cli
     assert all(reminder.remind_at == card.created_at + timedelta(days=14) for reminder in reminders)
 
 
+@pytest.mark.parametrize(
+    ("stage", "expected_status"),
+    [
+        (MatchCard.STAGE_INITIAL_CONTACT, 201),
+        (MatchCard.STAGE_STABLE_CONTACT, 201),
+        (MatchCard.STAGE_SUCCESS_PENDING_REVIEW, 400),
+        (MatchCard.STAGE_SUCCESS, 400),
+    ],
+)
+def test_matched_followup_stage_guard(
+    auth_client,
+    create_match_card,
+    create_staff,
+    stage,
+    expected_status,
+):
+    primary_staff = create_staff(name=f"主操作红娘-stage-{stage}")
+    card = create_match_card(
+        primary_staff=primary_staff,
+        male_staff=primary_staff,
+        stage=stage,
+    )
+
+    response = auth_client(primary_staff).post(
+        "/api/v1/follow-ups/",
+        {
+            "scene": "matched",
+            "match_card_id": card.id,
+            "user_id": card.male_user_id,
+            "content": f"{stage} 阶段尝试写 matched",
+            "is_still_contact": "yes",
+            "risk_status": "none",
+            "next_remind_mode": "default",
+        },
+        format="json",
+    )
+
+    assert response.status_code == expected_status
+    if expected_status == 400:
+        assert response.data["code"] == "MATCH_STAGE_TRANSITION_INVALID"
+
+
 def test_create_followup_requires_matched_fields(auth_client, create_match_card, create_staff):
     male_staff = create_staff(name="男方红娘B")
     card = create_match_card(male_staff=male_staff, primary_staff=male_staff)

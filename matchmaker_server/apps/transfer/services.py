@@ -5,11 +5,30 @@ from rest_framework.exceptions import PermissionDenied
 
 from apps.common.exceptions import BusinessRuleError
 from apps.matchcard.models import MatchCard
-from apps.oplog.services import create_operation_log
+from apps.oplog.services import (
+    ACTION_TRANSFER_APPLIED,
+    ACTION_TRANSFER_APPROVED,
+    ACTION_TRANSFER_REJECTED,
+    ACTION_USER_OWNER_CHANGED,
+    create_operation_log,
+)
 from apps.staff.models import Staff
 from apps.transfer.models import UserTransferRequest
 from apps.user.models import CustomerProfile
 from apps.user.services import OWNER_SYNC_MATCHCARD_STAGES, sync_owner_related_pending_reminders
+
+
+def _enqueue_transfer_applied_notification(transfer_request_id):
+    from apps.notify.services import EVENT_TRANSFER_APPLIED, enqueue_phase1_event_safely
+    from apps.notify.tasks import send_phase1_event
+
+    transaction.on_commit(
+        lambda: enqueue_phase1_event_safely(
+            send_phase1_event,
+            EVENT_TRANSFER_APPLIED,
+            transfer_request_id,
+        )
+    )
 
 
 def _sync_match_cards_and_capture(user, new_owner):
@@ -82,11 +101,12 @@ def create_transfer_request(*, actor, user_id, to_staff_id, reason):
 
     create_operation_log(
         operator=actor,
-        action="create_transfer_request",
+        action=ACTION_TRANSFER_APPLIED,
         target_type="user_transfer_request",
         target_id=req.id,
         after_json={"from_staff_id": user.owner_id, "to_staff_id": to_staff_id},
     )
+    _enqueue_transfer_applied_notification(req.id)
 
     return req
 
@@ -132,11 +152,19 @@ def approve_transfer_request(*, actor, transfer_id):
 
     create_operation_log(
         operator=actor,
-        action="approve_transfer_request",
+        action=ACTION_TRANSFER_APPROVED,
         target_type="user_transfer_request",
         target_id=req.id,
         before_json={"owner_id": old_owner_id},
         after_json={"owner_id": new_owner.id, "status": "approved"},
+    )
+    create_operation_log(
+        operator=actor,
+        action=ACTION_USER_OWNER_CHANGED,
+        target_type="user",
+        target_id=user.id,
+        before_json={"owner_id": old_owner_id},
+        after_json={"owner_id": new_owner.id},
     )
 
     return req, affected
@@ -167,7 +195,7 @@ def reject_transfer_request(*, actor, transfer_id, review_note=""):
 
     create_operation_log(
         operator=actor,
-        action="reject_transfer_request",
+        action=ACTION_TRANSFER_REJECTED,
         target_type="user_transfer_request",
         target_id=req.id,
         after_json={"status": "rejected", "review_note": review_note},

@@ -103,6 +103,7 @@ staff（红娘/管理员）
 | is_profile_complete | BOOLEAN | 是 | FALSE | 资料是否完整 |
 | is_in_match | BOOLEAN | 是 | FALSE | 是否存在进行中的配对卡；仅当存在 match_card.stage IN ('initial_contact', 'stable_contact', 'success_pending_review') 时为 TRUE，stage='success' 或 'ended' 时为 FALSE |
 | paid_at | TIMESTAMP | 否 | NULL | 付费时间（T+N 的起算点）；创建用户时可为空，后续确认付费完成时写入，一旦写入即作为未首见提醒计算基准 |
+| paused_at | TIMESTAMP | 否 | NULL | 最近一次进入 paused 状态的时间；暂停时写入，恢复时清空；用于 pause_revisit 提醒基准时间 |
 | last_action_at | TIMESTAMP | 否 | NULL | 最近有效动作时间（管理员用）；以下动作发生时更新：新建未配对跟进、发起推荐、用户状态变更、创建配对卡、更新配对卡关键字段、处理提醒、转移负责人。处理提醒时：target_type='user' 更新该用户；target_type='match_card' 更新双方用户 |
 | last_unmatched_active_at | TIMESTAMP | 否 | NULL | 未配对阶段最近有效动作时间，用于跟进超时计算；创建用户时自动设为 created_at，配对结束回流时重置为回流时间 |
 | profile_detail | JSON | 否 | NULL | 完整资料卡（结构化扩展字段） |

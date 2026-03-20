@@ -17,6 +17,19 @@ from apps.staff.models import Staff
 from apps.success.models import SuccessApplication, SuccessCase
 
 
+def _enqueue_success_applied_notification(application_id):
+    from apps.notify.services import EVENT_SUCCESS_APPLIED, enqueue_phase1_event_safely
+    from apps.notify.tasks import send_phase1_event
+
+    transaction.on_commit(
+        lambda: enqueue_phase1_event_safely(
+            send_phase1_event,
+            EVENT_SUCCESS_APPLIED,
+            application_id,
+        )
+    )
+
+
 def build_success_application_queryset(actor, queryset):
     if actor.role == Staff.ROLE_ADMIN:
         return queryset
@@ -114,6 +127,47 @@ def _create_success_revisit_reminders(match_card, approved_at):
         )
 
 
+def _expire_pre_success_match_card_reminders(match_card):
+    # 配对卡进入 success 后，旧的 matched 阶段提醒不再合法：
+    # 1. matched_revisit 是已配对阶段系统回访提醒
+    # 2. manual 可能是 matched/success_pending_review 期间留下的手动提醒
+    # 若不先失效，refresh_match_card_next_remind_at 会把这些旧提醒算入 next_remind_at。
+    expire_target_reminders(
+        Reminder.TARGET_MATCH_CARD,
+        match_card.id,
+        remind_types=[
+            Reminder.TYPE_MATCHED_REVISIT,
+            Reminder.TYPE_MANUAL,
+        ],
+    )
+
+
+def _enqueue_success_approved_notification(application_id):
+    from apps.notify.services import EVENT_SUCCESS_APPROVED, enqueue_phase1_event_safely
+    from apps.notify.tasks import send_phase1_event
+
+    transaction.on_commit(
+        lambda: enqueue_phase1_event_safely(
+            send_phase1_event,
+            EVENT_SUCCESS_APPROVED,
+            application_id,
+        )
+    )
+
+
+def _enqueue_success_rejected_notification(application_id):
+    from apps.notify.services import EVENT_SUCCESS_REJECTED, enqueue_phase1_event_safely
+    from apps.notify.tasks import send_phase1_event
+
+    transaction.on_commit(
+        lambda: enqueue_phase1_event_safely(
+            send_phase1_event,
+            EVENT_SUCCESS_REJECTED,
+            application_id,
+        )
+    )
+
+
 @transaction.atomic
 def create_success_application(validated_data, actor):
     """BR-SUCCESS-001: 前置条件 stage=stable_contact，创建后推进到 success_pending_review。"""
@@ -156,6 +210,7 @@ def create_success_application(validated_data, actor):
         },
         reason=application.apply_note or None,
     )
+    _enqueue_success_applied_notification(application.id)
     return application
 
 
@@ -182,6 +237,7 @@ def approve_success_application(application, actor):
     match_card.stage = MatchCard.STAGE_SUCCESS
     match_card.next_remind_at = None
     match_card.save(update_fields=["stage", "next_remind_at", "updated_at"])
+    _expire_pre_success_match_card_reminders(match_card)
     _create_success_revisit_reminders(match_card, now)
 
     match_card.male_user.is_in_match = False
@@ -202,6 +258,7 @@ def approve_success_application(application, actor):
         },
         reason=None,
     )
+    _enqueue_success_approved_notification(application.id)
 
     return {
         "id": application.id,
@@ -240,6 +297,7 @@ def reject_success_application(application, actor, review_note):
         },
         reason=review_note,
     )
+    _enqueue_success_rejected_notification(application.id)
 
     return {
         "id": application.id,

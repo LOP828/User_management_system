@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     "apps.config_mgmt",
     "apps.dashboard",
     "apps.search",
+    "apps.notify",
 ]
 
 MIDDLEWARE = [
@@ -128,6 +129,11 @@ CELERY_ACCEPT_CONTENT = ["json"]
 # Beat 调度时区与 Django TIME_ZONE 保持一致（Asia/Shanghai）。
 CELERY_TIMEZONE = os.getenv("TIME_ZONE", "Asia/Shanghai")
 
+WECOM_NOTIFY_ENABLED = os.getenv("WECOM_NOTIFY_ENABLED", "false").lower() == "true"
+WECOM_NOTIFY_REMINDER_DUE_ENABLED = os.getenv("WECOM_NOTIFY_REMINDER_DUE_ENABLED", "false").lower() == "true"
+WECOM_WEBHOOK_URL = os.getenv("WECOM_WEBHOOK_URL", "")
+WECOM_NOTIFY_TIMEOUT_SECONDS = int(os.getenv("WECOM_NOTIFY_TIMEOUT_SECONDS", "5"))
+
 # ---------------------------------------------------------------------------
 # Celery Beat 定时调度
 # ---------------------------------------------------------------------------
@@ -151,5 +157,14 @@ CELERY_BEAT_SCHEDULE = {
     "reminder-scan-first-meet": {
         "task": "reminder.scan_first_meet",
         "schedule": crontab(hour=0, minute=10),
+    },
+    # BR-REMIND-002：每日凌晨 00:15 扫描暂停用户回访
+    "reminder-scan-pause-revisit": {
+        "task": "reminder.scan_pause_revisit",
+        "schedule": crontab(hour=0, minute=15),
+    },
+    "notify-send-due-reminders": {
+        "task": "notify.send_due_reminders",
+        "schedule": crontab(minute="*/5"),
     },
 }

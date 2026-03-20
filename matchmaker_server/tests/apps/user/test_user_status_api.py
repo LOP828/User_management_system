@@ -1,4 +1,5 @@
 import pytest
+from django.utils import timezone
 from rest_framework import status
 
 from apps.config_mgmt.models import ReasonEnum
@@ -284,7 +285,7 @@ def test_pause_writes_pre_pause_status_and_history(
     assert history.reason_note == "用户最近太忙"
 
     oplog = OperationLog.objects.filter(target_type="user", target_id=user.id).latest("id")
-    assert oplog.action == "user_status_changed"
+    assert oplog.action == "user_paused"
     assert oplog.reason == "用户最近太忙"
     assert oplog.before_json["pool_status"] == CustomerProfile.STATUS_RECOMMENDED_PENDING_SELECT
     assert oplog.after_json["pool_status"] == CustomerProfile.STATUS_PAUSED
@@ -348,7 +349,7 @@ def test_resume_restores_pre_pause_status_and_writes_history(
     assert history.reason_note == "恢复服务"
 
     oplog = OperationLog.objects.filter(target_type="user", target_id=user.id).latest("id")
-    assert oplog.action == "user_status_changed"
+    assert oplog.action == "user_resumed"
     assert oplog.reason == "恢复服务"
     assert oplog.before_json["pool_status"] == CustomerProfile.STATUS_PAUSED
     assert oplog.after_json["pool_status"] == CustomerProfile.STATUS_RECOMMENDED_PENDING_SELECT
@@ -503,3 +504,91 @@ def test_api_created_user_change_status_overwrites_last_unmatched_active_at(
     user.refresh_from_db()
     assert user.last_unmatched_active_at > original_last_unmatched_active_at
     assert user.last_unmatched_active_at == user.last_action_at
+
+
+# ---------------------------------------------------------------------------
+# paused_at 写入/清空测试
+# ---------------------------------------------------------------------------
+
+
+def test_pause_sets_paused_at(
+    auth_client, matchmaker_staff, create_customer_profile, create_reason_enum
+):
+    """暂停时 paused_at 应被设为当前时间。"""
+    user = create_customer_profile(pool_status=CustomerProfile.STATUS_NEW_PENDING)
+    assert user.paused_at is None
+    reason = create_reason_enum(category=ReasonEnum.CATEGORY_PAUSE, label="暂停写 paused_at", sort_order=200)
+
+    before = timezone.now()
+    auth_client(matchmaker_staff).post(
+        f"/api/v1/users/{user.id}/pause/",
+        {"reason_id": reason.id},
+        format="json",
+    )
+
+    user.refresh_from_db()
+    assert user.paused_at is not None
+    assert user.paused_at >= before
+
+
+def test_resume_clears_paused_at(
+    auth_client, matchmaker_staff, create_customer_profile, create_reason_enum
+):
+    """恢复时 paused_at 应被清空。"""
+    reason = create_reason_enum(category=ReasonEnum.CATEGORY_PAUSE, label="暂停恢复测试", sort_order=201)
+    user = create_customer_profile(
+        pool_status=CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
+    )
+    auth_client(matchmaker_staff).post(
+        f"/api/v1/users/{user.id}/pause/",
+        {"reason_id": reason.id},
+        format="json",
+    )
+    user.refresh_from_db()
+    assert user.paused_at is not None
+
+    auth_client(matchmaker_staff).post(f"/api/v1/users/{user.id}/resume/")
+
+    user.refresh_from_db()
+    assert user.paused_at is None
+
+
+def test_admin_force_to_paused_sets_paused_at(
+    auth_client, admin_staff, create_customer_profile
+):
+    """admin force 进入 paused 时 paused_at 应被设置。"""
+    user = create_customer_profile(pool_status=CustomerProfile.STATUS_NEW_PENDING)
+    assert user.paused_at is None
+
+    before = timezone.now()
+    auth_client(admin_staff).post(
+        f"/api/v1/users/{user.id}/change-status/",
+        {"to_status": "paused", "force": True, "force_reason": "管理员强制暂停"},
+        format="json",
+    )
+
+    user.refresh_from_db()
+    assert user.pool_status == CustomerProfile.STATUS_PAUSED
+    assert user.paused_at is not None
+    assert user.paused_at >= before
+
+
+def test_admin_force_out_of_paused_clears_paused_at(
+    auth_client, admin_staff, create_customer_profile
+):
+    """admin force 从 paused 恢复时 paused_at 应被清空。"""
+    user = create_customer_profile(
+        pool_status=CustomerProfile.STATUS_PAUSED,
+        pre_pause_status=CustomerProfile.STATUS_NEW_PENDING,
+        paused_at=timezone.now(),
+    )
+
+    auth_client(admin_staff).post(
+        f"/api/v1/users/{user.id}/change-status/",
+        {"to_status": "new_pending", "force": True, "force_reason": "管理员强制恢复"},
+        format="json",
+    )
+
+    user.refresh_from_db()
+    assert user.pool_status == CustomerProfile.STATUS_NEW_PENDING
+    assert user.paused_at is None

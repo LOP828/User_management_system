@@ -27,7 +27,14 @@ temp/
 frontend/.chrome-*/
 frontend/playwright-report/
 frontend/test-results/
+frontend/*-page.html
+frontend/*5173*.html
+frontend/recommendation-create-flow.html
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 matchmaker_server/celerybeat-schedule*
+matchmaker_server/_codex_*.py
 .DS_Store
 Thumbs.db
 .vscode/

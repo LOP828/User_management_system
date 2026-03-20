@@ -43,6 +43,7 @@ class CustomerProfile(models.Model):
     is_profile_complete = models.BooleanField(default=False)
     is_in_match = models.BooleanField(default=False)
     paid_at = models.DateTimeField(null=True, blank=True)
+    paused_at = models.DateTimeField(null=True, blank=True)
     last_action_at = models.DateTimeField(null=True, blank=True)
     last_unmatched_active_at = models.DateTimeField(null=True, blank=True)
     profile_detail = models.JSONField(null=True, blank=True)

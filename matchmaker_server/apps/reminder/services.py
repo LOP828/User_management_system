@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from django.db import transaction
+from django.db.models import Exists, OuterRef, Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework import status
@@ -11,6 +12,7 @@ from apps.config_mgmt.models import ReasonEnum
 from apps.followup.models import FollowUpRecord
 from apps.matchcard.models import MatchCard
 from apps.matchcard.permissions import can_view_match_card
+from apps.oplog.services import ACTION_FOLLOW_UP_CREATED, ACTION_REMINDER_SET, create_operation_log
 from apps.reminder.models import Reminder
 from apps.staff.models import Staff
 from apps.user.models import CustomerProfile
@@ -451,6 +453,16 @@ def create_manual_reminder(validated_data, actor):
         remind_at=validated_data["remind_at"],
         actor=actor,
     )
+    create_operation_log(
+        operator=actor,
+        action=ACTION_REMINDER_SET,
+        target_type=reminder.target_type,
+        target_id=reminder.target_id,
+        after_json={
+            "remind_at": reminder.remind_at.isoformat(),
+            "remind_type": reminder.remind_type,
+        },
+    )
     return {
         "id": reminder.id,
         "target_type": reminder.target_type,
@@ -498,7 +510,7 @@ def _touch_match_card_users_after_reminder_processed(match_card, now):
 
 
 def _create_first_meet_overdue_follow_up(user, actor, overdue_reason, overdue_reason_note=None):
-    return FollowUpRecord.objects.create(
+    follow_up = FollowUpRecord.objects.create(
         scene=FollowUpRecord.SCENE_UNMATCHED,
         user=user,
         staff=actor,
@@ -506,6 +518,29 @@ def _create_first_meet_overdue_follow_up(user, actor, overdue_reason, overdue_re
         overdue_reason=overdue_reason,
         overdue_reason_note=overdue_reason_note or None,
     )
+    create_operation_log(
+        operator=actor,
+        action=ACTION_FOLLOW_UP_CREATED,
+        target_type="follow_up",
+        target_id=follow_up.id,
+        after_json={
+            "scene": follow_up.scene,
+            "match_card_id": follow_up.match_card_id,
+            "user_id": follow_up.user_id,
+        },
+    )
+    return follow_up
+
+
+def _ensure_reminder_target_processable(reminder, target):
+    if reminder.target_type != Reminder.TARGET_MATCH_CARD:
+        return
+    if target.stage == MatchCard.STAGE_ENDED:
+        raise BusinessRuleError(
+            "MATCH_STAGE_TRANSITION_INVALID",
+            "结束状态的配对卡提醒不允许处理",
+            status.HTTP_400_BAD_REQUEST,
+        )
 
 
 @transaction.atomic
@@ -522,6 +557,7 @@ def process_reminder(reminder, actor, overdue_reason=None, overdue_reason_note=N
     now = timezone.now()
     created_follow_up_id = None
     target = get_reminder_target(reminder)
+    _ensure_reminder_target_processable(reminder, target)
 
     reminder.status = Reminder.STATUS_PROCESSED
     reminder.processed_at = now
@@ -659,11 +695,17 @@ def scan_first_meet_reminders():
     """
     BR-REMIND-001：每日扫描未首见用户，按 paid_at 天数创建进度提醒。
 
-    触发对象：paid_at IS NOT NULL，is_in_match=False，非暂停、非已见面未继续，deleted_at 为空。
+    触发对象：paid_at IS NOT NULL，is_in_match=False，非暂停、非已见面未继续，
+              且从未出现在任何 MatchCard 中（即从未被安排过首见），deleted_at 为空。
     幂等：该类型已有 active（pending/sent）提醒则跳过。
     返回：本次新创建的提醒条数。
     """
     now = timezone.now()
+
+    # 排除已有 MatchCard 的用户：一旦建过卡，说明首见已被安排，不再需要 first_meet 提醒
+    _has_match_card = MatchCard.objects.filter(
+        Q(male_user_id=OuterRef("pk")) | Q(female_user_id=OuterRef("pk"))
+    )
 
     eligible_users = (
         CustomerProfile.objects.filter(
@@ -672,6 +714,7 @@ def scan_first_meet_reminders():
             deleted_at__isnull=True,
         )
         .exclude(pool_status__in=_FIRST_MEET_EXCLUDED_STATUSES)
+        .exclude(Exists(_has_match_card))
         .select_related("owner")
     )
 
@@ -704,6 +747,80 @@ def scan_first_meet_reminders():
             target_id=user.id,
             staff=user.owner,
             remind_type=target_remind_type,
+            remind_at=now,
+            status=Reminder.STATUS_PENDING,
+            is_manual=False,
+        )
+        created_count += 1
+
+    return created_count
+
+
+# ---------------------------------------------------------------------------
+# 定时任务扫描：暂停回访提醒（BR-REMIND-002）
+# ---------------------------------------------------------------------------
+
+
+def scan_pause_revisit_reminders():
+    """
+    BR-REMIND-002：每日扫描暂停中用户，按 pause_revisit_days 间隔创建暂停回访提醒。
+
+    基准时间：最近一条 unmatched 跟进记录的 created_at，若无则取 user.paused_at。
+    幂等：同一用户当日已有 pause_revisit 提醒（任意状态）则跳过。
+    返回：本次新创建的提醒条数。
+    """
+    now = timezone.now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    eligible_users = (
+        CustomerProfile.objects.filter(
+            pool_status=CustomerProfile.STATUS_PAUSED,
+            deleted_at__isnull=True,
+        )
+        .select_related("payment_level", "owner")
+    )
+
+    created_count = 0
+    for user in eligible_users:
+        baseline = user.paused_at
+
+        # 若存在暂停后的 unmatched 跟进记录，取最近一条的 created_at 作为基线
+        if baseline is not None:
+            latest_followup_at = (
+                FollowUpRecord.objects.filter(
+                    user=user,
+                    scene=FollowUpRecord.SCENE_UNMATCHED,
+                    created_at__gte=baseline,
+                )
+                .order_by("-created_at")
+                .values_list("created_at", flat=True)
+                .first()
+            )
+            if latest_followup_at is not None:
+                baseline = latest_followup_at
+
+        if baseline is None:
+            continue
+
+        interval = user.payment_level.pause_revisit_days
+        if (now - baseline).days < interval:
+            continue
+
+        # 幂等：当日已存在该用户的 pause_revisit 提醒则跳过
+        already_today = Reminder.objects.filter(
+            target_type=Reminder.TARGET_USER,
+            target_id=user.id,
+            remind_type=Reminder.TYPE_PAUSE_REVISIT,
+            created_at__gte=today_start,
+        ).exists()
+        if already_today:
+            continue
+
+        Reminder.objects.create(
+            target_type=Reminder.TARGET_USER,
+            target_id=user.id,
+            staff=user.owner,
+            remind_type=Reminder.TYPE_PAUSE_REVISIT,
             remind_at=now,
             status=Reminder.STATUS_PENDING,
             is_manual=False,

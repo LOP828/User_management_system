@@ -645,7 +645,7 @@ POST /api/v1/recommendations/{batch_id}/close/
 
 ### 6.5 候选人搜索（推荐用）
 
-> **⚠️ 实现状态（2026-03-16）：未实现。** 此端点在 `recommendation/urls.py` 中未注册。当前可用 `GET /api/v1/search/` 做基础关键词搜索替代，但语义不完全一致（不含重复推荐警告逻辑）。
+> **实现状态（2026-03-20）：已实现并已完成前端真实联调闭环。** 当前应直接使用 `GET /api/v1/recommendations/candidate-search/`，不再以 `GET /api/v1/search/` 作为该场景替代口径。
 
 ```
 GET /api/v1/recommendations/candidate-search/?user_id={id}&search={keyword}
@@ -1141,6 +1141,8 @@ POST /api/v1/success-applications/{id}/approve/
 
 **说明：** 该接口是配对卡从 `success_pending_review` 进入 `success` 的唯一出口
 
+> 联调备注（2026-03-20）：success 审批相关前端页面已完成真实联调闭环。已知存在 approve / invalidate 后约 1-2 秒读后延迟，前端已做本地状态同步兜底；该项属于非阻塞风险备注，不影响当前阶段收口结论。
+
 **成功响应（200）：**
 ```json
 {
@@ -1455,7 +1457,7 @@ POST /api/v1/reminders/manual/
 
 ## 12. 首页聚合接口（Dashboard）
 
-> **⚠️ 实现状态（2026-03-16）：部分实现。** 统计计数字段已实现；`items` 明细列表（含 `priority_score` / `overdue_days`）、`today_processed.count`、`recent_new.items`、`overdue_summary.by_staff` 均未实现。当前实际响应只包含计数（count）字段，不含 items 数组。详见 TODO.md。
+> **实现状态（2026-03-19）：已实现。** 红娘首页已返回 `unmatched_overdue`、`matched_pending_visit`、`today_processed`、`recent_new`；管理员首页已返回 `overdue_summary`。返回口径以本节响应示例为准。
 
 ### 12.1 红娘首页
 
@@ -1465,7 +1467,9 @@ GET /api/v1/dashboard/matchmaker/
 
 **权限：** matchmaker
 
-**实际响应（已实现，2026-03-16）：**
+> 联调状态（2026-03-20）：Dashboard 前端最小页面已完成真实联调闭环；红娘口径与管理员口径均已按当前接口返回完成展示验证。
+
+**实际响应（已实现，2026-03-19）：**
 ```json
 {
   "user_pool": {
@@ -1482,13 +1486,7 @@ GET /api/v1/dashboard/matchmaker/
   },
   "reminders": {
     "pending": 0
-  }
-}
-```
-
-**文档定义响应（未实现，保留供参考）：**
-```json
-{
+  },
   "unmatched_overdue": {
     "count": 3,
     "items": [
@@ -1498,7 +1496,7 @@ GET /api/v1/dashboard/matchmaker/
         "pool_status_display": "已沟通待推荐",
         "payment_level_name": "高级会员",
         "overdue_days": 5,
-        "overdue_type": "未首见超时",
+        "overdue_type": "跟进超时",
         "priority_score": 85
       }
     ]
@@ -1545,7 +1543,9 @@ GET /api/v1/dashboard/admin/
 
 **权限：** admin
 
-**实际响应（已实现，2026-03-16）：**
+> 联调状态（2026-03-20）：Dashboard 前端最小页面已完成真实联调闭环；管理员口径基础统计与 `overdue_summary.by_staff` 明细已完成真实展示验证。
+
+**实际响应（已实现，2026-03-19）：**
 ```json
 {
   "user_pool": {
@@ -1568,26 +1568,13 @@ GET /api/v1/dashboard/admin/
   "pending_approvals": {
     "transfer_count": 0,
     "success_count": 0
-  }
-}
-```
-
-**文档定义响应（未实现，保留供参考）：**
-```json
-{
+  },
   "overdue_summary": {
     "total_overdue_users": 12,
     "by_staff": [
       { "staff_id": 1, "staff_name": "王红娘", "overdue_count": 5 },
       { "staff_id": 2, "staff_name": "赵红娘", "overdue_count": 7 }
     ]
-  },
-  "pending_approvals": {
-    "transfer_count": 2,
-    "success_count": 1
-  },
-  "high_risk_matches": {
-    "count": 3
   }
 }
 ```

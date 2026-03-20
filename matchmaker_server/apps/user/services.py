@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Case, ExpressionWrapper, F, Func, IntegerField, Q, Value, When
+from django.db.models.functions import Greatest
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -8,7 +11,16 @@ from apps.common.exceptions import BusinessRuleError
 from apps.config_mgmt.models import ReasonEnum
 from apps.followup.models import FollowUpRecord
 from apps.matchcard.models import MatchCard
-from apps.oplog.services import create_operation_log
+from apps.oplog.services import (
+    ACTION_ADMIN_FORCE_CHANGE,
+    ACTION_USER_CREATED,
+    ACTION_USER_OWNER_CHANGED,
+    ACTION_USER_PAUSED,
+    ACTION_USER_PROFILE_UPDATED,
+    ACTION_USER_RESUMED,
+    ACTION_USER_STATUS_CHANGED,
+    create_operation_log,
+)
 from apps.reminder.models import Reminder
 from apps.staff.models import Staff
 from apps.user.models import CustomerProfile, UserStatusHistory
@@ -60,6 +72,74 @@ OWNER_SYNC_MATCHCARD_REMIND_TYPES = {
     Reminder.TYPE_MATCHED_REVISIT,
     Reminder.TYPE_MANUAL,
 }
+
+
+class _EpochSeconds(Func):
+    """Extract epoch seconds from a datetime field. Works on both SQLite and PostgreSQL."""
+
+    output_field = IntegerField()
+
+    def as_sqlite(self, compiler, connection, **extra_context):
+        lhs, params = compiler.compile(self.source_expressions[0])
+        return f"CAST(strftime('%%s', {lhs}) AS INTEGER)", params
+
+    def as_sql(self, compiler, connection, **extra_context):
+        lhs, params = compiler.compile(self.source_expressions[0])
+        return f"CAST(EXTRACT(EPOCH FROM {lhs}) AS INTEGER)", params
+
+
+def annotate_priority_score(queryset):
+    """BR-SORT-001/002: 在 QuerySet 上添加 priority_score annotation，支持 DB 层排序。
+
+    score = homepage_weight + max(overdue_days, 0) * 10 + 新用户加分(15)
+    当 overdue_days >= 7 时，保底 80 分。
+    """
+    now = timezone.now()
+    now_epoch = int(now.timestamp())
+    seven_days_ago = now - timedelta(days=7)
+
+    return (
+        queryset
+        .annotate(
+            _overdue_days=Case(
+                When(
+                    paid_at__isnull=False,
+                    then=ExpressionWrapper(
+                        (Value(now_epoch) - _EpochSeconds(F("paid_at"))) / Value(86400)
+                        - F("payment_level__followup_timeout_days"),
+                        output_field=IntegerField(),
+                    ),
+                ),
+                default=Value(0),
+                output_field=IntegerField(),
+            ),
+        )
+        .annotate(
+            _overdue_score=Case(
+                When(_overdue_days__gt=0, then=F("_overdue_days") * Value(10)),
+                default=Value(0),
+                output_field=IntegerField(),
+            ),
+            _new_bonus=Case(
+                When(created_at__gte=seven_days_ago, then=Value(15)),
+                default=Value(0),
+                output_field=IntegerField(),
+            ),
+        )
+        .annotate(
+            _base_score=ExpressionWrapper(
+                F("payment_level__homepage_weight") + F("_overdue_score") + F("_new_bonus"),
+                output_field=IntegerField(),
+            ),
+        )
+        .annotate(
+            priority_score=Case(
+                When(_overdue_days__gte=7, then=Greatest(F("_base_score"), Value(80))),
+                default=F("_base_score"),
+                output_field=IntegerField(),
+            ),
+        )
+    )
 
 
 def validate_minimum_contact(data):
@@ -154,6 +234,82 @@ def create_status_history(user, changed_by, from_status, to_status, reason=None,
     )
 
 
+def persist_user_status_change(
+    user,
+    actor,
+    *,
+    to_status,
+    reason=None,
+    reason_obj=None,
+    reason_note=None,
+    action="user_status_changed",
+    force=False,
+    force_reason=None,
+    tag_editor=None,
+    update_last_unmatched=True,
+    extra_update_fields=None,
+    before_json_extra=None,
+    after_json_extra=None,
+    response_message=None,
+    timestamp=None,
+):
+    now = timestamp or timezone.now()
+    from_status = user.pool_status
+    before_json = {
+        "pool_status": from_status,
+        "pre_pause_status": user.pre_pause_status,
+        "tags": user.tags or [],
+    }
+    if before_json_extra:
+        before_json.update(before_json_extra)
+
+    user.pool_status = to_status
+    user.last_action_at = now
+    update_fields = ["pool_status", "last_action_at", "updated_at"]
+    if update_last_unmatched and to_status != CustomerProfile.STATUS_PAUSED:
+        user.last_unmatched_active_at = now
+        update_fields.append("last_unmatched_active_at")
+    if tag_editor:
+        user.tags = tag_editor(user.tags)
+        update_fields.append("tags")
+    if extra_update_fields:
+        update_fields.extend(extra_update_fields)
+
+    user.save(update_fields=list(dict.fromkeys(update_fields)))
+    create_status_history(
+        user=user,
+        changed_by=actor,
+        from_status=from_status,
+        to_status=to_status,
+        reason=reason,
+        reason_obj=reason_obj,
+        reason_note=reason_note,
+    )
+
+    log_action = ACTION_ADMIN_FORCE_CHANGE if force else action
+    log_reason = force_reason if force else (reason or None)
+    after_json = {
+        "pool_status": user.pool_status,
+        "pre_pause_status": user.pre_pause_status,
+        "tags": user.tags or [],
+    }
+    if after_json_extra:
+        after_json.update(after_json_extra)
+
+    create_operation_log(
+        operator=actor,
+        action=log_action,
+        target_type="user",
+        target_id=user.id,
+        before_json=before_json,
+        after_json=after_json,
+        reason=log_reason,
+    )
+
+    if response_message is not None:
+        return build_status_response(user, response_message, force_applied=force)
+
+
 def build_user_list_queryset(actor, queryset):
     if actor.role == Staff.ROLE_ADMIN:
         return queryset
@@ -221,7 +377,20 @@ def create_customer_profile(validated_data, actor):
     user.last_unmatched_active_at = user.created_at
     user.save(update_fields=["last_unmatched_active_at", "updated_at"])
     create_initial_status_history(user, actor)
+    create_operation_log(
+        operator=actor,
+        action=ACTION_USER_CREATED,
+        target_type="user",
+        target_id=user.id,
+        after_json={"pool_status": user.pool_status, "owner_id": user.owner_id},
+    )
     return user
+
+
+_VALIDATED_DATA_TO_DB_FIELD = {
+    "owner": "owner_id",
+    "payment_level": "payment_level_id",
+}
 
 
 @transaction.atomic
@@ -265,26 +434,43 @@ def update_customer_profile(instance, validated_data, actor, force=False, force_
     validate_owner_for_actor(actor, payload["owner"])
     old_owner_id = instance.owner_id
     owner_changed = payload["owner"].id != old_owner_id
-    if owner_changed:
-        instance.last_action_at = timezone.now()
 
+    # 精确收集需要写入 DB 的字段，避免覆盖其他流程维护的字段
+    update_fields = []
     for field, value in validated_data.items():
         setattr(instance, field, value)
+        db_field = _VALIDATED_DATA_TO_DB_FIELD.get(field, field)
+        update_fields.append(db_field)
+
+    if owner_changed:
+        instance.last_action_at = timezone.now()
+        update_fields.append("last_action_at")
 
     instance.is_profile_complete = calculate_profile_complete(payload)
-    instance.save()
+    update_fields.append("is_profile_complete")
+    update_fields.append("updated_at")
+
+    instance.save(update_fields=list(dict.fromkeys(update_fields)))
 
     if owner_changed:
         sync_owner_related_active_match_cards(instance, instance.owner)
         sync_owner_related_pending_reminders(instance, old_owner_id, instance.owner)
         create_operation_log(
             operator=actor,
-            action="admin_force_change",
+            action=ACTION_USER_OWNER_CHANGED,
             target_type="user",
             target_id=instance.id,
             before_json={"owner_id": old_owner_id},
             after_json={"owner_id": instance.owner_id},
             reason=force_reason,
+        )
+    else:
+        create_operation_log(
+            operator=actor,
+            action=ACTION_USER_PROFILE_UPDATED,
+            target_type="user",
+            target_id=instance.id,
+            after_json={"is_profile_complete": instance.is_profile_complete},
         )
 
     return instance
@@ -391,57 +577,47 @@ def change_user_status(user, actor, to_status, reason="", force=False, force_rea
                 status.HTTP_400_BAD_REQUEST,
             )
 
-    now = timezone.now()
-    before_json = {
-        "pool_status": user.pool_status,
-        "pre_pause_status": user.pre_pause_status,
-        "tags": user.tags or [],
-    }
     from_status = user.pool_status
-    update_fields = ["pool_status", "last_action_at", "updated_at"]
-    user.pool_status = to_status
-    user.last_action_at = now
-
-    # BR-REMIND-009: 未配对池内状态变更时更新超时基线
-    if to_status != CustomerProfile.STATUS_PAUSED:
-        user.last_unmatched_active_at = now
-        update_fields.append("last_unmatched_active_at")
-
+    before_pre_pause = user.pre_pause_status
+    extra_update_fields = []
     if to_status == CustomerProfile.STATUS_PAUSED:
-        user.pre_pause_status = from_status if from_status != CustomerProfile.STATUS_PAUSED else user.pre_pause_status
-        if "pre_pause_status" not in update_fields:
-            update_fields.append("pre_pause_status")
+        user.pre_pause_status = (
+            from_status if from_status != CustomerProfile.STATUS_PAUSED else user.pre_pause_status
+        )
+        extra_update_fields.append("pre_pause_status")
+        user.paused_at = timezone.now()
+        extra_update_fields.append("paused_at")
     elif from_status == CustomerProfile.STATUS_PAUSED and user.pre_pause_status is not None:
         user.pre_pause_status = None
-        update_fields.append("pre_pause_status")
+        extra_update_fields.append("pre_pause_status")
+        user.paused_at = None
+        extra_update_fields.append("paused_at")
 
-    if to_status == CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND and from_status == CustomerProfile.STATUS_MET_NOT_CONTINUE:
-        user.tags = append_recommendation_tag(user.tags)
-        update_fields.append("tags")
+    tag_editor = (
+        append_recommendation_tag
+        if from_status == CustomerProfile.STATUS_MET_NOT_CONTINUE
+        and to_status == CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND
+        else None
+    )
 
-    user.save(update_fields=list(dict.fromkeys(update_fields)))
-    create_status_history(
-        user=user,
-        changed_by=actor,
-        from_status=from_status,
+    response = persist_user_status_change(
+        user,
+        actor,
         to_status=to_status,
         reason=reason or None,
         reason_note=force_reason if force else None,
+        action="user_status_changed",
+        force=force,
+        force_reason=force_reason,
+        tag_editor=tag_editor,
+        extra_update_fields=extra_update_fields or None,
+        before_json_extra={"pre_pause_status": before_pre_pause},
+        response_message="状态变更成功",
     )
-    create_operation_log(
-        operator=actor,
-        action="admin_force_change" if force else "user_status_changed",
-        target_type="user",
-        target_id=user.id,
-        before_json=before_json,
-        after_json={
-            "pool_status": user.pool_status,
-            "pre_pause_status": user.pre_pause_status,
-            "tags": user.tags or [],
-        },
-        reason=force_reason if force else (reason or None),
-    )
-    return build_status_response(user, "状态变更成功", force_applied=force)
+    if to_status == CustomerProfile.STATUS_MET_NOT_CONTINUE:
+        from apps.recommendation.services import mark_selected_candidate_not_continue
+        mark_selected_candidate_not_continue(user)
+    return response
 
 
 def pause_user(user, actor, reason_id=None, reason_note=None):
@@ -482,7 +658,8 @@ def pause_user(user, actor, reason_id=None, reason_note=None):
     user.pre_pause_status = from_status
     user.pool_status = CustomerProfile.STATUS_PAUSED
     user.last_action_at = now
-    user.save(update_fields=["pre_pause_status", "pool_status", "last_action_at", "updated_at"])
+    user.paused_at = now
+    user.save(update_fields=["pre_pause_status", "pool_status", "last_action_at", "paused_at", "updated_at"])
     create_status_history(
         user=user,
         changed_by=actor,
@@ -494,7 +671,7 @@ def pause_user(user, actor, reason_id=None, reason_note=None):
     )
     create_operation_log(
         operator=actor,
-        action="user_status_changed",
+        action=ACTION_USER_PAUSED,
         target_type="user",
         target_id=user.id,
         before_json=before_json,
@@ -526,10 +703,11 @@ def resume_user(user, actor):
     to_status = user.pre_pause_status
     user.pool_status = to_status
     user.pre_pause_status = None
+    user.paused_at = None
     user.last_action_at = now
     # BR-REMIND-009: 恢复到未配对池状态时更新超时基线
     user.last_unmatched_active_at = now
-    user.save(update_fields=["pool_status", "pre_pause_status", "last_action_at", "last_unmatched_active_at", "updated_at"])
+    user.save(update_fields=["pool_status", "pre_pause_status", "paused_at", "last_action_at", "last_unmatched_active_at", "updated_at"])
     create_status_history(
         user=user,
         changed_by=actor,
@@ -540,7 +718,7 @@ def resume_user(user, actor):
     )
     create_operation_log(
         operator=actor,
-        action="user_status_changed",
+        action=ACTION_USER_RESUMED,
         target_type="user",
         target_id=user.id,
         before_json=before_json,

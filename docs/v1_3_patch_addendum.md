@@ -23,6 +23,28 @@
 
 ---
 
+## 追加实现对齐说明（2026-03-19）
+
+本次仅做基准文档与现有实现的最小对齐，未引入新需求：
+
+1. **Dashboard 契约状态修正**
+   - `06_api_contract_v1_1_2.md` 中 Dashboard 已从“部分实现”修正为“已实现”
+   - 红娘端 `unmatched_overdue / matched_pending_visit / today_processed / recent_new`
+   - 管理端 `overdue_summary`
+   - 均以当前代码与测试口径为准
+
+2. **`overdue_type` 口径修正**
+   - Dashboard `unmatched_overdue.items[].overdue_type` 统一以当前实现 `"跟进超时"` 为准
+   - 不再使用旧示例中的 `"未首见超时"`
+
+3. **`paused_at` 正式字段补录**
+   - `paused_at` 已是 user 表正式字段
+   - 进入暂停时写入，恢复时清空
+   - `pause_revisit` 扫描的基准时间以 `paused_at` 为起点；若存在暂停后的 unmatched 跟进，则取最近一条跟进时间
+   - 该字段与规则已补入 `03_database_schema_v1_1_1.md`、`04_business_rules_v1_1_1.md`
+
+---
+
 ## 追加修正 1：同一红娘双侧计数规则矛盾
 
 ### 问题

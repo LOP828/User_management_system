@@ -7,6 +7,7 @@ from django.utils import timezone
 from apps.config_mgmt.models import ReasonEnum
 from apps.followup.models import FollowUpRecord
 from apps.matchcard.models import MatchCard
+from apps.recommendation.models import RecommendationBatch, RecommendationCandidate
 from apps.reminder.models import Reminder
 from apps.reminder.services import create_reminder
 from apps.user.models import CustomerProfile
@@ -117,13 +118,23 @@ def test_matched_revisit_created_via_match_card_api_appears_in_persisted_list(
         wechat="matched_reminder_female_a",
         pool_status=CustomerProfile.STATUS_SELECTED_PENDING_MEET,
     )
+    batch = RecommendationBatch.objects.create(
+        user=male_user,
+        staff=male_staff,
+        batch_no="REC-REMINDER-TEST",
+        candidate_count=1,
+        status=RecommendationBatch.STATUS_OPEN,
+    )
+    candidate = RecommendationCandidate.objects.create(
+        batch=batch, candidate_user=female_user, is_selected=True
+    )
 
     create_response = auth_client(male_staff).post(
         "/api/v1/match-cards/",
         {
             "male_user_id": male_user.id,
             "female_user_id": female_user.id,
-            "candidate_id": 1,
+            "candidate_id": candidate.id,
         },
         format="json",
     )

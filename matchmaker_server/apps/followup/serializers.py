@@ -108,24 +108,8 @@ class FollowUpWriteSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
     )
-    failure_reason_id = serializers.PrimaryKeyRelatedField(
-        source="failure_reason",
-        queryset=ReasonEnum.objects.filter(
-            category=ReasonEnum.CATEGORY_MEET_FAILURE,
-            is_active=True,
-        ),
-        required=False,
-        allow_null=True,
-    )
-    overdue_reason_id = serializers.PrimaryKeyRelatedField(
-        source="overdue_reason",
-        queryset=ReasonEnum.objects.filter(
-            category=ReasonEnum.CATEGORY_OVERDUE,
-            is_active=True,
-        ),
-        required=False,
-        allow_null=True,
-    )
+    failure_reason_id = serializers.IntegerField(required=False, allow_null=True)
+    overdue_reason_id = serializers.IntegerField(required=False, allow_null=True)
     overdue_reason_note = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=255)
 
     class Meta:
@@ -148,7 +132,7 @@ class FollowUpWriteSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         if self.instance is not None:
-            forbidden_fields = {"scene", "match_card", "user", "failure_reason", "overdue_reason", "overdue_reason_note"}
+            forbidden_fields = {"scene", "match_card", "user", "failure_reason_id", "overdue_reason_id", "overdue_reason_note"}
             provided = set(attrs.keys())
             illegal = provided & forbidden_fields
             if illegal:
@@ -200,6 +184,59 @@ class FollowUpWriteSerializer(serializers.ModelSerializer):
                 required_errors["user_id"] = ["user_id 为必填项。"]
         if required_errors:
             raise serializers.ValidationError(required_errors)
+
+        # --- failure_reason_id: 场景限制 + 存在性 + category 校验 ---
+        failure_reason_id_val = attrs.pop("failure_reason_id", None)
+        if failure_reason_id_val is not None:
+            if scene != FollowUpRecord.SCENE_UNMATCHED:
+                raise serializers.ValidationError({
+                    "failure_reason_id": ["FAILURE_REASON_NOT_ALLOWED: failure_reason_id 仅允许在 unmatched 场景使用。"]
+                })
+            try:
+                failure_reason_obj = ReasonEnum.objects.get(id=failure_reason_id_val)
+            except ReasonEnum.DoesNotExist:
+                raise serializers.ValidationError({
+                    "failure_reason_id": ["REASON_NOT_FOUND: 指定的失败原因不存在。"]
+                })
+            if failure_reason_obj.category != ReasonEnum.CATEGORY_MEET_FAILURE:
+                raise serializers.ValidationError({
+                    "failure_reason_id": ["INVALID_REASON_CATEGORY: failure_reason_id 必须属于 meet_failure 分类（见面失败原因）。"]
+                })
+            if not failure_reason_obj.is_active:
+                raise serializers.ValidationError({
+                    "failure_reason_id": ["REASON_NOT_FOUND: 该失败原因已停用。"]
+                })
+            attrs["failure_reason"] = failure_reason_obj
+
+        # --- overdue_reason_id: 场景限制 + 存在性 + category 校验 ---
+        overdue_reason_id_val = attrs.pop("overdue_reason_id", None)
+        if overdue_reason_id_val is not None:
+            if scene != FollowUpRecord.SCENE_UNMATCHED:
+                raise serializers.ValidationError({
+                    "overdue_reason_id": ["OVERDUE_REASON_NOT_ALLOWED: overdue_reason_id 仅允许在 unmatched 场景使用。"]
+                })
+            try:
+                overdue_reason_obj = ReasonEnum.objects.get(id=overdue_reason_id_val)
+            except ReasonEnum.DoesNotExist:
+                raise serializers.ValidationError({
+                    "overdue_reason_id": ["REASON_NOT_FOUND: 指定的超时原因不存在。"]
+                })
+            if overdue_reason_obj.category != ReasonEnum.CATEGORY_OVERDUE:
+                raise serializers.ValidationError({
+                    "overdue_reason_id": ["INVALID_REASON_CATEGORY: overdue_reason_id 必须属于 overdue 分类（超时原因）。"]
+                })
+            if not overdue_reason_obj.is_active:
+                raise serializers.ValidationError({
+                    "overdue_reason_id": ["REASON_NOT_FOUND: 该超时原因已停用。"]
+                })
+            attrs["overdue_reason"] = overdue_reason_obj
+
+        # --- overdue_reason_note: 场景限制（与 overdue_reason_id 一致，仅 unmatched）---
+        overdue_reason_note_val = attrs.get("overdue_reason_note")
+        if overdue_reason_note_val and scene != FollowUpRecord.SCENE_UNMATCHED:
+            raise serializers.ValidationError({
+                "overdue_reason_note": ["OVERDUE_REASON_NOTE_NOT_ALLOWED: overdue_reason_note 仅允许在 unmatched 场景使用。"]
+            })
 
         if scene == FollowUpRecord.SCENE_UNMATCHED:
             if match_card is not None:

@@ -1,6 +1,14 @@
+from django.db.models import Q
+from django.utils import timezone
+
 from rest_framework import serializers
 
 from apps.config_mgmt.models import PaymentLevel
+from apps.followup.models import FollowUpRecord
+from apps.followup.serializers import FollowUpBaseSerializer
+from apps.matchcard.models import MatchCard
+from apps.matchcard.serializers import MatchCardBaseSerializer
+from apps.recommendation.models import RecommendationCandidate
 from apps.staff.models import Staff
 from apps.user.models import CustomerProfile
 from apps.user.services import create_customer_profile, update_customer_profile
@@ -62,7 +70,34 @@ class CustomerProfileListSerializer(CustomerProfileBaseSerializer):
         fields = CustomerProfileBaseSerializer.Meta.fields + ("priority_score",)
 
     def get_priority_score(self, obj):
-        return 0
+        """BR-SORT-001 / BR-SORT-002：未配对池综合排序分。
+
+        优先使用 DB annotation（annotate_priority_score），回退到 Python 计算。
+        """
+        annotated = getattr(obj, "priority_score", None)
+        if annotated is not None:
+            return annotated
+
+        now = timezone.now()
+        score = 0
+        payment_level = getattr(obj, "payment_level", None)
+        if payment_level:
+            score += payment_level.homepage_weight
+
+        overdue_days = 0
+        if obj.paid_at and payment_level:
+            elapsed = (now - obj.paid_at).days
+            overdue_days = elapsed - payment_level.followup_timeout_days
+            if overdue_days > 0:
+                score += overdue_days * 10
+
+        if (now - obj.created_at).days <= 7:
+            score += 15
+
+        if overdue_days >= 7:
+            score = max(score, 80)
+
+        return score
 
 
 class CustomerProfileDetailSerializer(CustomerProfileBaseSerializer):
@@ -92,16 +127,43 @@ class CustomerProfileDetailSerializer(CustomerProfileBaseSerializer):
         return obj.emotional_history or []
 
     def get_recent_follow_ups(self, obj):
-        return []
+        qs = (
+            FollowUpRecord.objects.filter(user=obj, scene=FollowUpRecord.SCENE_UNMATCHED)
+            .select_related("staff", "match_card", "failure_reason", "overdue_reason")
+            .order_by("-created_at")[:5]
+        )
+        return FollowUpBaseSerializer(qs, many=True).data
 
     def get_active_match_card(self, obj):
-        return None
+        card = (
+            MatchCard.objects.filter(
+                Q(male_user=obj) | Q(female_user=obj),
+            )
+            .exclude(stage=MatchCard.STAGE_ENDED)
+            .select_related(
+                "male_user", "female_user",
+                "male_staff", "female_staff", "primary_staff",
+                "recommendation_candidate__candidate_user",
+                "risk_reason",
+            )
+            .order_by("-created_at")
+            .first()
+        )
+        if card is None:
+            return None
+        return MatchCardBaseSerializer(card).data
 
     def get_stats(self, obj):
+        candidates = RecommendationCandidate.objects.filter(batch__user=obj)
+        total_recommendations = candidates.count()
+        total_meetings = candidates.filter(is_met=True).count()
+        total_match_cards = MatchCard.objects.filter(
+            Q(male_user=obj) | Q(female_user=obj),
+        ).count()
         return {
-            "total_recommendations": 0,
-            "total_meetings": 0,
-            "total_match_cards": 0,
+            "total_recommendations": total_recommendations,
+            "total_meetings": total_meetings,
+            "total_match_cards": total_match_cards,
         }
 
 

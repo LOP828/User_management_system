@@ -3,14 +3,21 @@
 涵盖：
   - scan_followup_timeout_reminders（BR-REMIND-009）
   - scan_first_meet_reminders（BR-REMIND-001）
+  - scan_pause_revisit_reminders（BR-REMIND-002）
 """
 from datetime import timedelta
 
 import pytest
 from django.utils import timezone
 
+from apps.followup.models import FollowUpRecord
+from apps.matchcard.models import MatchCard
 from apps.reminder.models import Reminder
-from apps.reminder.services import scan_first_meet_reminders, scan_followup_timeout_reminders
+from apps.reminder.services import (
+    scan_first_meet_reminders,
+    scan_followup_timeout_reminders,
+    scan_pause_revisit_reminders,
+)
 from apps.user.models import CustomerProfile
 
 
@@ -345,3 +352,378 @@ class TestScanFirstMeet:
         assert r.staff_id == matchmaker_staff.id
         assert r.status == Reminder.STATUS_PENDING
         assert r.is_manual is False
+
+    def test_skips_user_with_existing_match_card_as_male(
+        self, create_customer_profile, create_staff, matchmaker_staff
+    ):
+        """曾作为男方建过卡的用户不再生成 first_meet 提醒"""
+        female_owner = create_staff(phone="13800138901", name="女方红娘FM1")
+        male_user = create_customer_profile(
+            owner=matchmaker_staff,
+            pool_status=CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
+            paid_at=timezone.now() - timedelta(days=5),
+        )
+        female_user = create_customer_profile(
+            owner=female_owner,
+            gender=CustomerProfile.GENDER_FEMALE,
+            phone="13900139901",
+        )
+        MatchCard.objects.create(
+            male_user=male_user,
+            female_user=female_user,
+            male_staff=matchmaker_staff,
+            female_staff=female_owner,
+            primary_staff=matchmaker_staff,
+            stage=MatchCard.STAGE_ENDED,
+        )
+
+        count = scan_first_meet_reminders()
+
+        assert count == 0
+        assert not Reminder.objects.filter(target_id=male_user.id).exists()
+
+    def test_skips_user_with_existing_match_card_as_female(
+        self, create_customer_profile, create_staff, matchmaker_staff
+    ):
+        """曾作为女方建过卡的用户不再生成 first_meet 提醒"""
+        male_owner = create_staff(phone="13800138902", name="男方红娘FM2")
+        female_user = create_customer_profile(
+            owner=matchmaker_staff,
+            gender=CustomerProfile.GENDER_FEMALE,
+            phone="13900139902",
+            pool_status=CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
+            paid_at=timezone.now() - timedelta(days=3),
+        )
+        male_user = create_customer_profile(
+            owner=male_owner,
+            phone="13900139903",
+        )
+        MatchCard.objects.create(
+            male_user=male_user,
+            female_user=female_user,
+            male_staff=male_owner,
+            female_staff=matchmaker_staff,
+            primary_staff=male_owner,
+            stage=MatchCard.STAGE_ENDED,
+        )
+
+        count = scan_first_meet_reminders()
+
+        assert count == 0
+
+    def test_skips_reflowed_user_with_match_card_history(
+        self, create_customer_profile, create_staff, matchmaker_staff
+    ):
+        """
+        已回流用户（曾有 MatchCard，现在回到 communicated_pending_recommend）
+        不应再收到 first_meet 提醒。
+        """
+        female_owner = create_staff(phone="13800138903", name="女方红娘FM3")
+        user = create_customer_profile(
+            owner=matchmaker_staff,
+            pool_status=CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
+            is_in_match=False,
+            paid_at=timezone.now() - timedelta(days=5),
+        )
+        partner = create_customer_profile(
+            owner=female_owner,
+            gender=CustomerProfile.GENDER_FEMALE,
+            phone="13900139904",
+            is_in_match=False,
+        )
+        # 曾建卡 → 已结束 → 回流
+        MatchCard.objects.create(
+            male_user=user,
+            female_user=partner,
+            male_staff=matchmaker_staff,
+            female_staff=female_owner,
+            primary_staff=matchmaker_staff,
+            stage=MatchCard.STAGE_ENDED,
+        )
+
+        count = scan_first_meet_reminders()
+
+        assert count == 0
+
+    def test_generates_for_user_without_any_match_card(
+        self, create_customer_profile, matchmaker_staff
+    ):
+        """从未建过卡的用户正常生成 first_meet 提醒"""
+        user = create_customer_profile(
+            owner=matchmaker_staff,
+            pool_status=CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
+            paid_at=timezone.now() - timedelta(days=3),
+        )
+        # 不创建任何 MatchCard
+
+        count = scan_first_meet_reminders()
+
+        assert count == 1
+        r = Reminder.objects.get(target_id=user.id)
+        assert r.remind_type == Reminder.TYPE_FIRST_MEET_DELAYED
+
+
+# ---------------------------------------------------------------------------
+# BR-REMIND-002：scan_pause_revisit_reminders
+# ---------------------------------------------------------------------------
+
+
+class TestPauseRevisitReminders:
+
+    def test_creates_reminder_when_paused_at_exceeds_interval(
+        self, create_customer_profile, matchmaker_staff, create_payment_level
+    ):
+        """暂停超过 pause_revisit_days 天 → 生成 pause_revisit 提醒"""
+        pl = create_payment_level(pause_revisit_days=30)
+        user = create_customer_profile(
+            owner=matchmaker_staff,
+            payment_level=pl,
+            pool_status=CustomerProfile.STATUS_PAUSED,
+            pre_pause_status=CustomerProfile.STATUS_NEW_PENDING,
+            paused_at=timezone.now() - timedelta(days=31),
+        )
+
+        count = scan_pause_revisit_reminders()
+
+        assert count == 1
+        r = Reminder.objects.get(target_id=user.id)
+        assert r.remind_type == Reminder.TYPE_PAUSE_REVISIT
+        assert r.staff_id == matchmaker_staff.id
+        assert r.status == Reminder.STATUS_PENDING
+
+    def test_skips_when_paused_at_within_interval(
+        self, create_customer_profile, matchmaker_staff, create_payment_level
+    ):
+        """暂停未满 pause_revisit_days → 不生成提醒"""
+        pl = create_payment_level(pause_revisit_days=30)
+        create_customer_profile(
+            owner=matchmaker_staff,
+            payment_level=pl,
+            pool_status=CustomerProfile.STATUS_PAUSED,
+            pre_pause_status=CustomerProfile.STATUS_NEW_PENDING,
+            paused_at=timezone.now() - timedelta(days=10),
+        )
+
+        count = scan_pause_revisit_reminders()
+
+        assert count == 0
+
+    def test_skips_when_paused_at_is_null(
+        self, create_customer_profile, matchmaker_staff
+    ):
+        """paused_at 为 NULL（存量数据）→ 跳过不报错"""
+        create_customer_profile(
+            owner=matchmaker_staff,
+            pool_status=CustomerProfile.STATUS_PAUSED,
+            pre_pause_status=CustomerProfile.STATUS_NEW_PENDING,
+            paused_at=None,
+        )
+
+        count = scan_pause_revisit_reminders()
+
+        assert count == 0
+
+    def test_baseline_falls_back_to_latest_unmatched_followup(
+        self, create_customer_profile, matchmaker_staff, create_payment_level
+    ):
+        """有 unmatched 跟进记录时，基线回退到 follow_up.created_at"""
+        pl = create_payment_level(pause_revisit_days=30)
+        user = create_customer_profile(
+            owner=matchmaker_staff,
+            payment_level=pl,
+            pool_status=CustomerProfile.STATUS_PAUSED,
+            pre_pause_status=CustomerProfile.STATUS_NEW_PENDING,
+            paused_at=timezone.now() - timedelta(days=60),
+        )
+        # 10 天前有跟进记录 → 基线变成 10 天前，不满 30 天 → 不生成
+        FollowUpRecord.objects.create(
+            scene=FollowUpRecord.SCENE_UNMATCHED,
+            user=user,
+            staff=matchmaker_staff,
+            content="暂停期间回访",
+        )
+        # 手动把 created_at 改到 10 天前
+        FollowUpRecord.objects.filter(user=user).update(
+            created_at=timezone.now() - timedelta(days=10)
+        )
+
+        count = scan_pause_revisit_reminders()
+
+        assert count == 0
+
+    def test_baseline_followup_exceeds_interval_generates_reminder(
+        self, create_customer_profile, matchmaker_staff, create_payment_level
+    ):
+        """最近跟进超过 interval 天 → 生成提醒"""
+        pl = create_payment_level(pause_revisit_days=30)
+        user = create_customer_profile(
+            owner=matchmaker_staff,
+            payment_level=pl,
+            pool_status=CustomerProfile.STATUS_PAUSED,
+            pre_pause_status=CustomerProfile.STATUS_NEW_PENDING,
+            paused_at=timezone.now() - timedelta(days=60),
+        )
+        FollowUpRecord.objects.create(
+            scene=FollowUpRecord.SCENE_UNMATCHED,
+            user=user,
+            staff=matchmaker_staff,
+            content="暂停期间回访",
+        )
+        FollowUpRecord.objects.filter(user=user).update(
+            created_at=timezone.now() - timedelta(days=35)
+        )
+
+        count = scan_pause_revisit_reminders()
+
+        assert count == 1
+
+    def test_idempotent_same_day_no_duplicate(
+        self, create_customer_profile, matchmaker_staff, create_payment_level
+    ):
+        """同日重复扫描不重复创建"""
+        pl = create_payment_level(pause_revisit_days=30)
+        create_customer_profile(
+            owner=matchmaker_staff,
+            payment_level=pl,
+            pool_status=CustomerProfile.STATUS_PAUSED,
+            pre_pause_status=CustomerProfile.STATUS_NEW_PENDING,
+            paused_at=timezone.now() - timedelta(days=31),
+        )
+
+        count1 = scan_pause_revisit_reminders()
+        count2 = scan_pause_revisit_reminders()
+
+        assert count1 == 1
+        assert count2 == 0
+
+    def test_skips_non_paused_users(
+        self, create_customer_profile, matchmaker_staff
+    ):
+        """非暂停状态的用户不触发 pause_revisit"""
+        create_customer_profile(
+            owner=matchmaker_staff,
+            pool_status=CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
+            paused_at=timezone.now() - timedelta(days=60),
+        )
+
+        count = scan_pause_revisit_reminders()
+
+        assert count == 0
+
+    def test_skips_deleted_users(
+        self, create_customer_profile, matchmaker_staff, create_payment_level
+    ):
+        """已软删除用户不触发 pause_revisit"""
+        pl = create_payment_level(pause_revisit_days=30)
+        create_customer_profile(
+            owner=matchmaker_staff,
+            payment_level=pl,
+            pool_status=CustomerProfile.STATUS_PAUSED,
+            pre_pause_status=CustomerProfile.STATUS_NEW_PENDING,
+            paused_at=timezone.now() - timedelta(days=31),
+            deleted_at=timezone.now(),
+        )
+
+        count = scan_pause_revisit_reminders()
+
+        assert count == 0
+
+    # ── baseline bug 修复覆盖 ─────────────────────────────────────────────
+
+    def test_pre_pause_followup_not_used_as_baseline(
+        self, create_customer_profile, matchmaker_staff, create_payment_level
+    ):
+        """暂停前的 unmatched 跟进不应作为 baseline，应回退到 paused_at。
+
+        场景：paused_at=31天前，跟进记录 created_at=40天前（早于暂停）。
+        baseline 应为 paused_at(31天前)，超过 30 天 → 生成提醒。
+        """
+        pl = create_payment_level(pause_revisit_days=30)
+        user = create_customer_profile(
+            owner=matchmaker_staff,
+            payment_level=pl,
+            pool_status=CustomerProfile.STATUS_PAUSED,
+            pre_pause_status=CustomerProfile.STATUS_NEW_PENDING,
+            paused_at=timezone.now() - timedelta(days=31),
+        )
+        # 暂停前的跟进记录（created_at 早于 paused_at）
+        FollowUpRecord.objects.create(
+            scene=FollowUpRecord.SCENE_UNMATCHED,
+            user=user,
+            staff=matchmaker_staff,
+            content="暂停前的跟进",
+        )
+        FollowUpRecord.objects.filter(user=user).update(
+            created_at=timezone.now() - timedelta(days=40)
+        )
+
+        count = scan_pause_revisit_reminders()
+
+        # baseline = paused_at(31天前) → 超过 30 天 → 应生成
+        assert count == 1
+
+    def test_post_pause_followup_used_as_baseline(
+        self, create_customer_profile, matchmaker_staff, create_payment_level
+    ):
+        """暂停后的 unmatched 跟进应优先作为 baseline。
+
+        场景：paused_at=60天前，暂停后跟进 created_at=10天前。
+        baseline 应为跟进(10天前)，未满 30 天 → 不生成提醒。
+        """
+        pl = create_payment_level(pause_revisit_days=30)
+        user = create_customer_profile(
+            owner=matchmaker_staff,
+            payment_level=pl,
+            pool_status=CustomerProfile.STATUS_PAUSED,
+            pre_pause_status=CustomerProfile.STATUS_NEW_PENDING,
+            paused_at=timezone.now() - timedelta(days=60),
+        )
+        # 暂停后的跟进记录
+        FollowUpRecord.objects.create(
+            scene=FollowUpRecord.SCENE_UNMATCHED,
+            user=user,
+            staff=matchmaker_staff,
+            content="暂停后回访",
+        )
+        FollowUpRecord.objects.filter(user=user).update(
+            created_at=timezone.now() - timedelta(days=10)
+        )
+
+        count = scan_pause_revisit_reminders()
+
+        # baseline = 跟进(10天前) → 未满 30 天 → 不生成
+        assert count == 0
+
+    def test_pre_pause_followup_ignored_falls_back_to_paused_at(
+        self, create_customer_profile, matchmaker_staff, create_payment_level
+    ):
+        """仅有暂停前跟进、无暂停后跟进时，正确回退到 paused_at。
+
+        场景：paused_at=20天前，跟进 created_at=50天前。
+        baseline 应为 paused_at(20天前)，未满 30 天 → 不生成提醒。
+        若 bug 仍在（误用暂停前跟进 50天前做 baseline），则会错误生成。
+        """
+        pl = create_payment_level(pause_revisit_days=30)
+        user = create_customer_profile(
+            owner=matchmaker_staff,
+            payment_level=pl,
+            pool_status=CustomerProfile.STATUS_PAUSED,
+            pre_pause_status=CustomerProfile.STATUS_NEW_PENDING,
+            paused_at=timezone.now() - timedelta(days=20),
+        )
+        # 仅有暂停前的跟进
+        FollowUpRecord.objects.create(
+            scene=FollowUpRecord.SCENE_UNMATCHED,
+            user=user,
+            staff=matchmaker_staff,
+            content="暂停前的旧跟进",
+        )
+        FollowUpRecord.objects.filter(user=user).update(
+            created_at=timezone.now() - timedelta(days=50)
+        )
+
+        count = scan_pause_revisit_reminders()
+
+        # baseline = paused_at(20天前) → 未满 30 天 → 不生成
+        # 若误用暂停前跟进(50天前)做 baseline → 会错误生成提醒
+        assert count == 0

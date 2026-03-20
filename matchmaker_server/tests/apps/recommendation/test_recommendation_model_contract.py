@@ -23,6 +23,28 @@ def test_recommendation_candidate_meta_contract():
     assert RecommendationCandidate._meta.get_field("result").blank is True
 
 
+def test_recommendation_candidate_enforces_single_selected_per_batch(create_staff, create_customer_profile):
+    user = create_customer_profile()
+    first_candidate_user = create_customer_profile(name="候选人丙", gender="female")
+    second_candidate_user = create_customer_profile(name="候选人丁", gender="female")
+    staff = create_staff()
+    batch = RecommendationBatch.objects.create(user=user, staff=staff, batch_no="REC-20260316-005")
+
+    RecommendationCandidate.objects.create(
+        batch=batch,
+        candidate_user=first_candidate_user,
+        is_selected=True,
+    )
+
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            RecommendationCandidate.objects.create(
+                batch=batch,
+                candidate_user=second_candidate_user,
+                is_selected=True,
+            )
+
+
 def test_recommendation_batch_allows_minimal_fields(create_staff, create_customer_profile):
     user = create_customer_profile()
     staff = create_staff()

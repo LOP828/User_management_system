@@ -12,10 +12,13 @@ from apps.followup.services import get_match_card_side_valid_visit_counts
 from apps.matchcard.models import MatchCard
 from apps.matchcard.permissions import MATCHCARD_EDITABLE_FIELDS, can_view_match_card, get_allowed_update_fields
 from apps.oplog.services import create_operation_log
+from apps.recommendation.models import RecommendationBatch, RecommendationCandidate
+from apps.recommendation.services import mark_candidate_continue
 from apps.reminder.models import Reminder
 from apps.reminder.services import expire_target_reminders, sync_match_card_revisit_reminders
 from apps.staff.models import Staff
 from apps.user.models import CustomerProfile
+from apps.user.services import append_recommendation_tag, persist_user_status_change
 
 
 STAGE_DISPLAY_MAP = {
@@ -37,6 +40,49 @@ ALLOWED_STAGE_TRANSITIONS = {
     MatchCard.STAGE_SUCCESS: {MatchCard.STAGE_ENDED},
     MatchCard.STAGE_ENDED: set(),
 }
+
+
+def _require_candidate_batch_access(actor, candidate):
+    if actor.role == Staff.ROLE_ADMIN:
+        return
+    if candidate.batch.staff_id != actor.id:
+        raise PermissionDenied("无权限")
+
+
+def _resolve_match_card_candidate(actor, male_user, female_user, candidate_id):
+    try:
+        candidate = RecommendationCandidate.objects.select_related("candidate_user", "batch__user").get(id=candidate_id)
+    except RecommendationCandidate.DoesNotExist:
+        raise BusinessRuleError("CANDIDATE_NOT_FOUND", "候选人不存在", status.HTTP_400_BAD_REQUEST)
+
+    _require_candidate_batch_access(actor, candidate)
+
+    if candidate.batch.status != RecommendationBatch.STATUS_OPEN:
+        raise BusinessRuleError("BATCH_CLOSED", "推荐批次已关闭，无法建卡", status.HTTP_400_BAD_REQUEST)
+
+    expected_ids = {male_user.id, female_user.id}
+    actual_ids = {candidate.batch.user_id, candidate.candidate_user_id}
+    if expected_ids != actual_ids:
+        raise BusinessRuleError(
+            "CANDIDATE_MISMATCH",
+            "候选人与正在建卡的用户不匹配",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not candidate.is_selected:
+        raise BusinessRuleError(
+            "CANDIDATE_NOT_SELECTED",
+            "候选人尚未标记选中",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    if candidate.is_met:
+        raise BusinessRuleError(
+            "CANDIDATE_ALREADY_PROCESSED",
+            "候选人已被处理过",
+            status.HTTP_400_BAD_REQUEST,
+        )
+
+    return candidate
 
 
 def build_matchcard_queryset(actor, queryset):
@@ -63,6 +109,7 @@ def require_matchcard_primary_permission(actor, match_card):
 def create_match_card(validated_data, actor):
     male_user = validated_data["male_user"]
     female_user = validated_data["female_user"]
+    candidate_id = validated_data["candidate_id"]
 
     if male_user.id == female_user.id:
         raise ValidationError({"female_user_id": ["男方和女方不能是同一用户。"]})
@@ -87,6 +134,7 @@ def create_match_card(validated_data, actor):
             status.HTTP_400_BAD_REQUEST,
         )
 
+    candidate = _resolve_match_card_candidate(actor, male_user, female_user, candidate_id)
     now = timezone.now()
     match_card = MatchCard.objects.create(
         male_user=male_user,
@@ -97,6 +145,7 @@ def create_match_card(validated_data, actor):
         stage=MatchCard.STAGE_INITIAL_CONTACT,
         risk_level=MatchCard.RISK_NONE,
         next_remind_at=now + timedelta(days=7),
+        recommendation_candidate=candidate,
     )
 
     male_user.is_in_match = True
@@ -122,6 +171,7 @@ def create_match_card(validated_data, actor):
         reason=None,
     )
     sync_match_card_revisit_reminders(match_card)
+    mark_candidate_continue(candidate)
 
     return match_card
 
@@ -141,11 +191,32 @@ def update_match_card(instance, validated_data, actor):
     if not attempted_fields.issubset(allowed_fields):
         raise PermissionDenied("无权限")
 
+    # 记录变更前后值（仅实际变化的字段）
+    before_json = {}
+    after_json = {}
+    for field in attempted_fields:
+        old_value = getattr(instance, field)
+        new_value = validated_data[field]
+        if old_value != new_value:
+            before_json[field] = old_value
+            after_json[field] = new_value
+
     for field, value in validated_data.items():
         if field in attempted_fields:
             setattr(instance, field, value)
 
     instance.save(update_fields=[*attempted_fields, "updated_at"])
+
+    if before_json:
+        create_operation_log(
+            operator=actor,
+            action="match_card_updated",
+            target_type="match_card",
+            target_id=instance.id,
+            before_json=before_json,
+            after_json=after_json,
+            reason=None,
+        )
 
     now = timezone.now()
     instance.male_user.last_action_at = now
@@ -172,13 +243,6 @@ def build_risk_response(match_card, message):
         "risk_level_display": RISK_DISPLAY_MAP.get(match_card.risk_level, match_card.risk_level),
         "message": message,
     }
-
-
-def _append_recommendation_tag(tags):
-    new_tags = list(tags or [])
-    if "待重新推荐" not in new_tags:
-        new_tags.append("待重新推荐")
-    return new_tags
 
 
 def _masked_name(name):
@@ -385,34 +449,18 @@ def end_match_card(match_card, actor, end_reason_male=None, end_reason_female=No
         (match_card.male_user, match_card.female_user.name),
         (match_card.female_user, match_card.male_user.name),
     ):
-        original_status = user.pool_status
         user.is_in_match = False
-        user.pool_status = CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND
-        user.tags = _append_recommendation_tag(user.tags)
-        user.last_unmatched_active_at = now
         _append_emotional_history(user, partner_name, match_card)
-        user.save(
-            update_fields=[
-                "is_in_match",
-                "pool_status",
-                "tags",
-                "last_unmatched_active_at",
-                "emotional_history",
-                "updated_at",
-            ]
-        )
-        create_operation_log(
-            operator=actor,
-            action="user_status_changed",
-            target_type="user",
-            target_id=user.id,
-            before_json={"pool_status": original_status, "is_in_match": True},
-            after_json={
-                "pool_status": user.pool_status,
-                "is_in_match": user.is_in_match,
-                "tags": user.tags,
-            },
+        persist_user_status_change(
+            user,
+            actor,
+            to_status=CustomerProfile.STATUS_COMMUNICATED_PENDING_RECOMMEND,
             reason="配对卡结束自动回流",
+            tag_editor=append_recommendation_tag,
+            extra_update_fields=["is_in_match", "emotional_history"],
+            before_json_extra={"is_in_match": True},
+            after_json_extra={"is_in_match": False},
+            timestamp=now,
         )
         reflowed_users.append(
             {

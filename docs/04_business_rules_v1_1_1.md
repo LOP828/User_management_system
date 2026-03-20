@@ -184,7 +184,8 @@
 2. met_not_continue 状态不允许直接暂停（必须先处理完失败流程）
 3. 必须填写暂停原因（reason_enum.category = 'pause' 中选择）
 4. 系统记录 pre_pause_status = 当前状态
-5. 同步写入 user_status_history.reason_id = 暂停原因 ID，user_status_history.reason_note = 暂停备注
+5. 系统记录 paused_at = 当前时间
+6. 同步写入 user_status_history.reason_id = 暂停原因 ID，user_status_history.reason_note = 暂停备注
 
 ---
 
@@ -196,8 +197,9 @@
 1. 当前状态必须为 paused
 2. 恢复后状态 = pre_pause_status
 3. 恢复后清空 pre_pause_status = NULL
-4. 恢复后重新按正常规则生成提醒
-5. 写入 user_status_history；恢复操作无结构化原因时，reason_id = NULL，reason_note 默认写入"恢复服务"
+4. 恢复后清空 paused_at = NULL
+5. 恢复后重新按正常规则生成提醒
+6. 写入 user_status_history；恢复操作无结构化原因时，reason_id = NULL，reason_note 默认写入"恢复服务"
 
 ---
 
@@ -581,12 +583,15 @@ if user.pool_status NOT IN ('paused', 'met_not_continue')
 ```python
 if user.pool_status == 'paused':
     revisit_interval = user.payment_level.pause_revisit_days
-    last_follow_up = 最近一条跟进记录的 created_at
-    
-    if last_follow_up 为空:
-        基准时间 = 用户进入暂停的时间
-    else:
-        基准时间 = last_follow_up
+    基准时间 = user.paused_at
+
+    if 基准时间 不为空:
+        last_follow_up = 最近一条 created_at >= paused_at 的 unmatched 跟进记录
+        if last_follow_up 不为空:
+            基准时间 = last_follow_up
+
+    if 基准时间 为空:
+        跳过（存量历史数据不报错）
     
     if (today - 基准时间).days >= revisit_interval:
         创建提醒(type='pause_revisit')

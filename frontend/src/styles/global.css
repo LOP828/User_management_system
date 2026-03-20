@@ -1,0 +1,60 @@
+:root {
+  color: #0f172a;
+  background: #f3f7f6;
+  font-family: "Segoe UI", "PingFang SC", "Hiragino Sans GB", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 1280px;
+  background:
+    radial-gradient(circle at top left, rgba(15, 118, 110, 0.14), transparent 28%),
+    linear-gradient(180deg, #f7faf9 0%, #edf3f1 100%);
+}
+
+a {
+  color: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.app-sider {
+  border-right: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 0 24px rgba(15, 23, 42, 0.04);
+}
+
+.brand-block {
+  padding: 24px 20px 12px;
+}
+
+.brand-title.ant-typography {
+  margin-bottom: 4px;
+}
+
+.brand-subtitle.ant-typography {
+  margin-bottom: 0;
+  color: #64748b;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.app-content {
+  padding: 24px;
+}
